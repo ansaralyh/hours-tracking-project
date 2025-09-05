@@ -366,25 +366,6 @@ function App() {
     });
   };
 
-  const handleDeleteHoursEntry = (entryId: string) => {
-    if (confirm('Weet je zeker dat je deze uren wilt verwijderen?')) {
-      const newHoursEntries = hoursEntries.filter(h => h.id !== entryId);
-      setHoursEntries(newHoursEntries);
-      
-      // Update localStorage
-      if (newHoursEntries.length === 0) {
-        localStorage.removeItem('urenregistratie-hours');
-      } else {
-        localStorage.setItem('urenregistratie-hours', JSON.stringify(newHoursEntries));
-      }
-    }
-  };
-
-  const getHoursForProfile = (profileId: string) => {
-    return hoursEntries
-      .filter(entry => entry.profileId === profileId)
-      .reduce((total, entry) => total + entry.hours, 0);
-  };
 
   const getHoursForDate = (date: string) => {
     return hoursEntries.filter(entry => 
