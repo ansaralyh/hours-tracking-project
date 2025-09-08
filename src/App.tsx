@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calculator, Users, Euro, FileText, Download, Upload, Plus, Trash2, X, Clock, Calendar } from 'lucide-react';
+import { Calculator, Users, Euro, FileText, Download, Upload, Plus, Trash2, X, Clock, Calendar, AlertCircle } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { FaQuestionCircle } from 'react-icons/fa';
 
@@ -20,7 +20,7 @@ interface Deduction {
   amount: number;
   type: 'percentage' | 'fixed';
   priority: number;
-  appliesTo: 'employee' | 'employer' | 'both'; // Added appliesTo field
+  appliesTo: 'employee' | 'employer' | 'both';
 }
 
 interface HoursEntry {
@@ -68,7 +68,9 @@ function App() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isHoursModalOpen, setIsHoursModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
+  const [profileToDelete, setProfileToDelete] = useState<Profile | null>(null);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [calculations, setCalculations] = useState<CalculationResult[]>([]);
   const [appliedDeductions, setAppliedDeductions] = useState<Record<string, boolean>>({});
@@ -284,23 +286,6 @@ function App() {
     setIsProfileModalOpen(true);
   };
 
-  // const handleEditProfile = (profile: Profile) => {
-  //   setEditingProfile(profile);
-  //   setProfileForm({
-  //     name: profile.name,
-  //     hourlyRate: profile.hourlyRate,
-  //     deductionType: profile.deductionType,
-  //     deductions: profile.deductions.map(d => ({
-  //       name: d.name,
-  //       amount: d.amount,
-  //       type: d.type,
-  //       priority: d.priority,
-  //       appliesTo: d.appliesTo,
-  //     })),
-  //   });
-  //   setIsProfileModalOpen(true);
-  // };
-
   const handleSaveProfile = () => {
     if (!profileForm.name.trim() || profileForm.hourlyRate <= 0) {
       alert('Vul alle verplichte velden in');
@@ -331,29 +316,57 @@ function App() {
     setIsProfileModalOpen(false);
     setEditingProfile(null);
   };
-
-  // const handleDeleteProfile = (profileId: string) => {
-  //   if (confirm('Weet je zeker dat je dit profiel wilt verwijderen?')) {
-  //     const newProfiles = profiles.filter(p => p.id !== profileId);
-  //     const newHoursEntries = hoursEntries.filter(h => h.profileId !== profileId);
-
-  //     setProfiles(newProfiles);
-  //     setHoursEntries(newHoursEntries);
-
-  //     // Update localStorage
-  //     if (newProfiles.length === 0) {
-  //       localStorage.removeItem('urenregistratie-profiles');
-  //     } else {
-  //       localStorage.setItem('urenregistratie-profiles', JSON.stringify(newProfiles));
-  //     }
-
-  //     if (newHoursEntries.length === 0) {
-  //       localStorage.removeItem('urenregistratie-hours');
-  //     } else {
-  //       localStorage.setItem('urenregistratie-hours', JSON.stringify(newHoursEntries));
-  //     }
-  //   }
+  // const handleEditProfile = (profile: Profile) => {
+  //   setEditingProfile(profile);
+  //   setProfileForm({
+  //     name: profile.name,
+  //     hourlyRate: profile.hourlyRate,
+  //     deductionType: profile.deductionType,
+  //     deductions: profile.deductions.map(d => ({
+  //       name: d.name,
+  //       amount: d.amount,
+  //       type: d.type,
+  //       priority: d.priority,
+  //       appliesTo: d.appliesTo,
+  //     })),
+  //   });
+  //   setIsProfileModalOpen(true);
   // };
+
+  // Add this delete function
+  const handleDeleteProfile = (profile: Profile) => {
+    setProfileToDelete(profile);
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDeleteProfile = () => {
+    if (!profileToDelete) return;
+
+    // Remove the profile
+    const newProfiles = profiles.filter(p => p.id !== profileToDelete.id);
+    setProfiles(newProfiles);
+
+    // Remove related hours entries
+    const newHoursEntries = hoursEntries.filter(h => h.profileId !== profileToDelete.id);
+    setHoursEntries(newHoursEntries);
+
+    // Update localStorage
+    if (newProfiles.length === 0) {
+      localStorage.removeItem('urenregistratie-profiles');
+    } else {
+      localStorage.setItem('urenregistratie-profiles', JSON.stringify(newProfiles));
+    }
+
+    if (newHoursEntries.length === 0) {
+      localStorage.removeItem('urenregistratie-hours');
+    } else {
+      localStorage.setItem('urenregistratie-hours', JSON.stringify(newHoursEntries));
+    }
+
+    // Close the modal and reset state
+    setIsDeleteModalOpen(false);
+    setProfileToDelete(null);
+  };
 
   const addDeduction = () => {
     setProfileForm({
@@ -786,14 +799,12 @@ function App() {
           </div>
 
           {/* Payment Distribution Card */}
-          {/* Payment Distribution Card */}
           <div className="bg-white rounded-2xl shadow-medium border border-slate-200/50 overflow-hidden">
             <div className="flex flex-col space-y-1.5 pb-4 p-6">
               <h3 className="text-xl font-semibold text-slate-900 tracking-tight flex items-center space-x-2">
                 <FileText className="h-5 w-5 text-primary-600" />
                 <span>Uitbetalingen</span>
               </h3>
-              <p className="text-sm text-slate-500">Top 5 laatst bijgewerkte profielen</p>
             </div>
             <div className="p-6">
               <div className="space-y-3">
@@ -803,60 +814,21 @@ function App() {
                     <p className="text-sm text-slate-500">Geen profielen toegevoegd</p>
                   </div>
                 ) : (
-                  // Sort by updatedAt date and take top 5
-                  paymentDistribution
-                    .map(payment => {
-                      const profile = profiles.find(p => p.id === payment.profileId);
-                      return {
-                        ...payment,
-                        updatedAt: profile?.updatedAt || new Date(0)
-                      };
-                    })
-                    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-                    .slice(0, 5)
-                    .map((payment) => {
-                      const profile = profiles.find(p => p.id === payment.profileId);
-                      const updatedDate = profile?.updatedAt ? new Date(profile.updatedAt) : null;
-
-                      return (
-                        <div key={payment.profileId} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-                          <div>
-                            <div className="font-medium text-slate-900">{payment.profileName}</div>
-                            <div className="text-xs text-slate-500">
-                              {payment.percentage.toFixed(1)}% •
-                              {updatedDate ? ` Bijgewerkt: ${updatedDate.toLocaleDateString('nl-NL')}` : ' Niet bijgewerkt'}
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="font-semibold text-slate-900">
-                              {formatCurrency(payment.amount)}
-                            </div>
-                            {updatedDate && (
-                              <div className="text-xs text-slate-400 mt-1">
-                                {updatedDate.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}
-                              </div>
-                            )}
-                          </div>
+                  paymentDistribution.map((payment) => (
+                    <div key={payment.profileId} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                      <div>
+                        <div className="font-medium text-slate-900">{payment.profileName}</div>
+                        <div className="text-xs text-slate-500">{payment.percentage.toFixed(1)}%</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-semibold text-slate-900">
+                          {formatCurrency(payment.amount)}
                         </div>
-                      );
-                    })
+                      </div>
+                    </div>
+                  ))
                 )}
               </div>
-
-              {/* Show "View All" button if there are more than 5 profiles */}
-              {paymentDistribution.length > 5 && (
-                <div className="mt-4 pt-4 border-t border-slate-200">
-                  <button
-                    className="w-full text-center text-sm text-primary-600 hover:text-primary-700 font-medium"
-                    onClick={() => {
-                      // You can implement a function to show all profiles here
-                      setShowProfilesToast(true);
-                    }}
-                  >
-                    Alle {paymentDistribution.length} profielen bekijken →
-                  </button>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -1136,23 +1108,10 @@ function App() {
             </div>
 
             <div className="max-h-80 overflow-y-auto">
-              {/* Add New Profile Button */}
-              <div
-                className="p-4 border-t border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors"
-                onClick={() => {
-                  setShowProfilesToast(false);
-                  handleAddProfile();
-                }}
-              >
-                <div className="flex items-center space-x-2  text-primary-600">
-                  <Plus className="h-4 w-4" />
-                  <span className="font-medium">Nieuw profiel toevoegen</span>
-                </div>
-              </div>  
               {profiles.map((profile) => (
                 <div
                   key={profile.id}
-                  className="p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors"
+                  className="p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors group relative"
                   onClick={() => {
                     setEditingProfile(profile);
                     setProfileForm({
@@ -1174,6 +1133,7 @@ function App() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-3">
                       <div className="w-3 h-3 bg-primary-500 rounded-full"></div>
+                      
                       <span className="font-medium text-slate-900">{profile.name}</span>
                     </div>
                     <div className="text-sm text-slate-500">
@@ -1183,14 +1143,107 @@ function App() {
                   <div className="mt-2 text-xs text-slate-500">
                     {profile.deductions.length} aftrekking{profile.deductions.length !== 1 ? 'en' : ''}
                   </div>
+
+                  {/* Delete button - only visible on hover */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteProfile(profile);
+                    }}
+                    className="absolute top-11   right-2 p-1 text-slate-400 hover:text-danger-600 transition-colors opacity-100"
+                    title="Profiel verwijderen"
+                  >
+                    <Trash2 className="h-5 w-8" />
+                  </button>
                 </div>
               ))}
 
-              
+              {/* Add New Profile Button */}
+              <div
+                className="p-4 border-t border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors"
+                onClick={() => {
+                  setShowProfilesToast(false);
+                  handleAddProfile();
+                }}
+              >
+                <div className="flex items-center space-x-2 text-primary-600">
+                  <Plus className="h-4 w-4" />
+                  <span className="font-medium">Nieuw profiel toevoegen</span>
+                </div>
+              </div>
             </div>
           </div>
         )}
       </main>
+
+      {/* Delete Confirmation Modal */}
+      {isDeleteModalOpen && profileToDelete && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity" />
+          <div className="flex min-h-full items-center justify-center p-4">
+            <div className="relative w-full max-w-md bg-white rounded-2xl shadow-large">
+              <div className="flex items-center justify-between p-6 border-b border-slate-200">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 bg-danger-100 rounded-xl">
+                    <AlertCircle className="h-6 w-6 text-danger-600" />
+                  </div>
+                  <div className="flex-1">
+                    <h2 className="text-xl font-semibold text-slate-900 tracking-tight">Profiel Verwijderen</h2>
+                    <p className="text-sm text-slate-500 mt-1">Weet u zeker dat u dit profiel wilt verwijderen?</p>
+                  </div>
+                </div>
+                <button
+                  className="ml-4 -mr-2 inline-flex items-center justify-center rounded-xl px-2 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus:ring-slate-500"
+                  onClick={() => setIsDeleteModalOpen(false)}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="p-6">
+                <div className="space-y-4">
+                  <div className="p-4 bg-slate-50 rounded-xl">
+                    <h3 className="font-medium text-slate-900">{profileToDelete.name}</h3>
+                    <div className="text-sm text-slate-500 mt-1">
+                      {formatCurrency(profileToDelete.hourlyRate)}/uur • {profileToDelete.deductions.length} aftrekkingen
+                    </div>
+                    <div className="text-xs text-slate-400 mt-2">
+                      Aangemaakt: {new Date(profileToDelete.createdAt).toLocaleDateString('nl-NL')}
+                    </div>
+                  </div>
+
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                    <div className="flex items-start space-x-3">
+                      <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5" />
+                      <div className="flex-1">
+                        <h4 className="font-medium text-amber-900">Let op!</h4>
+                        <p className="text-sm text-amber-700 mt-1">
+                          Alle uren die aan dit profiel zijn gekoppeld, worden ook verwijderd. Deze actie kan niet ongedaan worden gemaakt.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end space-x-3 pt-4 border-t border-slate-200">
+                    <button
+                      className="inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus:ring-slate-500"
+                      onClick={() => setIsDeleteModalOpen(false)}
+                    >
+                      Annuleren
+                    </button>
+                    <button
+                      className="inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-danger-600 text-white shadow-soft hover:bg-danger-700 hover:shadow-medium focus:ring-danger-500 active:scale-95"
+                      onClick={confirmDeleteProfile}
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Verwijderen
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Profile Management Modal */}
       {isProfileModalOpen && (
@@ -1566,6 +1619,8 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Export/Import Modal */}
       {isExportModalOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity" />
@@ -1671,7 +1726,6 @@ function App() {
           </div>
         </div>
       )}
-
     </div>
   );
 }
