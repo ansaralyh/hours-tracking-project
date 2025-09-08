@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Calculator, Users, Euro, FileText, Download, Upload, Plus, Edit, Trash2, X, Clock, Calendar } from 'lucide-react';
 import jsPDF from 'jspdf';
+import { FaQuestionCircle } from 'react-icons/fa';
 
 // Types
 interface Profile {
@@ -60,6 +61,8 @@ interface PaymentDistribution {
 }
 
 function App() {
+  const [showCalculationTooltip, setShowCalculationTooltip] = useState(false);
+
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [hoursEntries, setHoursEntries] = useState<HoursEntry[]>([]);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -74,6 +77,10 @@ function App() {
     averageRate: 0,
   });
   const [paymentDistribution, setPaymentDistribution] = useState<PaymentDistribution[]>([]);
+
+
+  const [showProfilesToast, setShowProfilesToast] = useState(false);
+  const [selectedProfileForEdit, setSelectedProfileForEdit] = useState<Profile | null>(null);
 
   // Profile form state
   const [profileForm, setProfileForm] = useState({
@@ -94,7 +101,7 @@ function App() {
   useEffect(() => {
     const savedProfiles = localStorage.getItem('urenregistratie-profiles');
     const savedHours = localStorage.getItem('urenregistratie-hours');
-    
+
     if (savedProfiles) {
       try {
         const parsedProfiles = JSON.parse(savedProfiles).map((profile: any) => ({
@@ -107,7 +114,7 @@ function App() {
         console.error('Error loading profiles:', error);
       }
     }
-    
+
     if (savedHours) {
       try {
         const parsedHours = JSON.parse(savedHours).map((entry: any) => ({
@@ -153,13 +160,13 @@ function App() {
     const results: CalculationResult[] = profiles.map(profile => {
       const totalHours = profileHours[profile.id] || 0;
       const grossAmount = totalHours * profile.hourlyRate;
-      
+
       // Calculate deductions (prioritize Uurloon before Marge)
       let totalDeductions = 0;
       const deductionBreakdown = profile.deductions
         .sort((a, b) => a.priority - b.priority)
         .map(deduction => {
-          const amount = deduction.type === 'percentage' 
+          const amount = deduction.type === 'percentage'
             ? (grossAmount * deduction.amount) / 100
             : deduction.amount;
           totalDeductions += amount;
@@ -282,17 +289,17 @@ function App() {
     if (confirm('Weet je zeker dat je dit profiel wilt verwijderen?')) {
       const newProfiles = profiles.filter(p => p.id !== profileId);
       const newHoursEntries = hoursEntries.filter(h => h.profileId !== profileId);
-      
+
       setProfiles(newProfiles);
       setHoursEntries(newHoursEntries);
-      
+
       // Update localStorage
       if (newProfiles.length === 0) {
         localStorage.removeItem('urenregistratie-profiles');
       } else {
         localStorage.setItem('urenregistratie-profiles', JSON.stringify(newProfiles));
       }
-      
+
       if (newHoursEntries.length === 0) {
         localStorage.removeItem('urenregistratie-hours');
       } else {
@@ -368,7 +375,7 @@ function App() {
 
 
   const getHoursForDate = (date: string) => {
-    return hoursEntries.filter(entry => 
+    return hoursEntries.filter(entry =>
       entry.date.toISOString().split('T')[0] === date
     );
   };
@@ -391,50 +398,50 @@ function App() {
     const drawTable = (x: number, y: number, colWidths: number[], rowHeights: number[], data: string[][], isHeaderBold: boolean = false) => {
       doc.setDrawColor(0, 0, 0);
       doc.setLineWidth(0.5);
-      
+
       const totalWidth = colWidths.reduce((sum, width) => sum + width, 0);
       const totalHeight = rowHeights.reduce((sum, height) => sum + height, 0);
-      
+
       // Draw outer border
       doc.rect(x, y, totalWidth, totalHeight);
-      
+
       // Draw vertical lines between columns
       let currentX = x;
       for (let i = 0; i < colWidths.length - 1; i++) {
         currentX += colWidths[i];
         doc.line(currentX, y, currentX, y + totalHeight);
       }
-      
+
       // Draw horizontal lines between rows
       let currentY = y;
       for (let i = 0; i < rowHeights.length - 1; i++) {
         currentY += rowHeights[i];
         doc.line(x, currentY, x + totalWidth, currentY);
       }
-      
+
       // Add text to cells with proper centering
       currentY = y;
       data.forEach((row, rowIndex) => {
         currentX = x;
-        
+
         // Set font style for header row
         if (rowIndex === 0 && isHeaderBold) {
           doc.setFont('helvetica', 'bold');
         } else {
           doc.setFont('helvetica', 'normal');
         }
-        
+
         row.forEach((cellText, colIndex) => {
           const cellWidth = colWidths[colIndex];
           const cellHeight = rowHeights[rowIndex];
-          
+
           // Calculate center position for text
           const cellCenterX = currentX + (cellWidth / 2);
           const cellCenterY = currentY + (cellHeight / 2) + 2; // +2 for better vertical centering
-          
+
           // Center all text in cells
           doc.text(cellText, cellCenterX, cellCenterY, { align: 'center' });
-          
+
           currentX += cellWidth;
         });
         currentY += rowHeights[rowIndex];
@@ -471,7 +478,7 @@ function App() {
     const summaryTableY = yPosition;
     const summaryColWidths = [90, 70];
     const summaryRowHeights = [15, 15, 15, 15];
-    
+
     doc.setFontSize(11);
     drawTable(20, summaryTableY, summaryColWidths, summaryRowHeights, summaryData);
     yPosition += (summaryRowHeights.reduce((sum, height) => sum + height, 0)) + 25;
@@ -487,7 +494,7 @@ function App() {
       const headers = ['Naam', 'Uren', 'Tarief', 'Bruto', 'Aftrek', 'Netto'];
       const colWidths = [40, 25, 30, 30, 30, 30];
       const rowHeight = 15;
-      
+
       // Create table data with headers and rows
       const tableData = [headers];
       calculations.forEach((calc) => {
@@ -501,10 +508,10 @@ function App() {
         ];
         tableData.push(rowData);
       });
-      
+
       // Create row heights array
       const rowHeights = Array(tableData.length).fill(rowHeight);
-      
+
       // Draw table with proper cells
       doc.setFontSize(10);
       drawTable(20, yPosition, colWidths, rowHeights, tableData, true);
@@ -527,18 +534,18 @@ function App() {
       const dailyHeaders = ['Datum', 'Uren', 'Profielen', 'Totaal'];
       const dailyColWidths = [45, 25, 45, 35];
       const dailyRowHeight = 15;
-      
+
       const dailyEntries = Array.from(new Set(hoursEntries.map(entry => entry.date.toISOString().split('T')[0])))
         .sort()
         .reverse();
-      
+
       // Create table data with headers and rows
       const dailyTableData = [dailyHeaders];
       dailyEntries.forEach((date) => {
         const dayEntries = getHoursForDate(date);
         const totalHours = dayEntries.reduce((sum, entry) => sum + entry.hours, 0);
         const uniqueProfiles = new Set(dayEntries.map(entry => entry.profileId)).size;
-        
+
         const rowData = [
           new Date(date).toLocaleDateString('nl-NL'),
           formatHours(totalHours),
@@ -547,10 +554,10 @@ function App() {
         ];
         dailyTableData.push(rowData);
       });
-      
+
       // Create row heights array
       const dailyRowHeights = Array(dailyTableData.length).fill(dailyRowHeight);
-      
+
       // Draw table with proper cells
       doc.setFontSize(10);
       drawTable(20, yPosition, dailyColWidths, dailyRowHeights, dailyTableData, true);
@@ -597,7 +604,7 @@ function App() {
     reader.onload = (e) => {
       try {
         const data = JSON.parse(e.target?.result as string);
-        
+
         if (data.profiles) {
           const importedProfiles = data.profiles.map((profile: any) => ({
             ...profile,
@@ -606,7 +613,7 @@ function App() {
           }));
           setProfiles(importedProfiles);
         }
-        
+
         if (data.hoursEntries) {
           const importedHours = data.hoursEntries.map((entry: any) => ({
             ...entry,
@@ -614,7 +621,7 @@ function App() {
           }));
           setHoursEntries(importedHours);
         }
-        
+
         alert('Data succesvol geïmporteerd!');
       } catch (error) {
         alert('Fout bij importeren van data. Controleer of het bestand geldig is.');
@@ -638,7 +645,7 @@ function App() {
                 <p className="text-sm text-slate-500">Professionele uren- en betalingscalculator</p>
               </div>
             </div>
-            
+
             <div className="flex items-center space-x-3">
               <label className="inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus:ring-slate-500 cursor-pointer">
                 <Upload className="h-4 w-4 mr-2" />
@@ -675,7 +682,13 @@ function App() {
               </button>
               <button
                 className="inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-primary-600 text-white shadow-soft hover:bg-primary-700 hover:shadow-medium focus:ring-primary-500 active:scale-95"
-                onClick={handleAddProfile}
+                onClick={() => {
+                  if (profiles.length === 0) {
+                    handleAddProfile();
+                  } else {
+                    setShowProfilesToast(!showProfilesToast);
+                  }
+                }}
               >
                 <Users className="h-4 w-4 mr-2" />
                 Profielen
@@ -706,7 +719,7 @@ function App() {
                     Totaal voor {formatHours(clientPayment.totalHours)}
                   </div>
                 </div>
-                
+
                 <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-200">
                   <div className="text-center">
                     <div className="text-lg font-semibold text-slate-900">
@@ -780,13 +793,13 @@ function App() {
                     const totalHours = dayEntries.reduce((sum, entry) => sum + entry.hours, 0);
                     return (
                       <div key={date} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-      <div>
+                        <div>
                           <div className="font-medium text-slate-900">
-                            {new Date(date).toLocaleDateString('nl-NL', { 
-                              weekday: 'long', 
-                              year: 'numeric', 
-                              month: 'long', 
-                              day: 'numeric' 
+                            {new Date(date).toLocaleDateString('nl-NL', {
+                              weekday: 'long',
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric'
                             })}
                           </div>
                           <div className="text-xs text-slate-500">
@@ -809,33 +822,49 @@ function App() {
           </div>
         )}
 
+
         {/* Middle Section - People & Hours */}
         <div className="bg-white rounded-2xl shadow-medium border border-slate-200/50 overflow-hidden">
           <div className="flex flex-col space-y-1.5 pb-4 p-6">
             <div className="flex items-center justify-between">
-              <h3 className="text-xl font-semibold text-slate-900 tracking-tight flex items-center space-x-2">
-                <Users className="h-5 w-5 text-primary-600" />
-                <span>Personen & Uren</span>
-              </h3>
+              <div className="flex items-center space-x-2">
+                <h3 className="text-xl font-semibold text-slate-900 tracking-tight flex items-center space-x-2">
+                  <Users className="h-5 w-5 text-primary-600" />
+                  <span
+
+                    className="cursor-help border-b border-dashed border-slate-300 text-green-500"
+                  >
+                    Personen & Uren
+                  </span>
+                  <FaQuestionCircle className='text-xl mr-1 text-blue-500'
+                    onMouseEnter={() => setShowCalculationTooltip(true)}
+                    onMouseLeave={() => setShowCalculationTooltip(false)} />
+                </h3>
+              </div>
+
               <div className="flex items-center space-x-3">
-                <button
-                  className="inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-success-600 text-white shadow-soft hover:bg-success-700 hover:shadow-medium focus:ring-success-500 active:scale-95"
-                  onClick={handleAddHours}
-                  disabled={profiles.length === 0}
-                >
-                  <Clock className="h-4 w-4 mr-2" />
-                  Uren Toevoegen
-                </button>
-                <button
-                  className="inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-primary-600 text-white shadow-soft hover:bg-primary-700 hover:shadow-medium focus:ring-primary-500 active:scale-95"
-                  onClick={handleAddProfile}
-                >
-                  <Users className="h-4 w-4 mr-2" />
-                  Profiel Toevoegen
-                </button>
+
               </div>
             </div>
           </div>
+
+          {/* Tooltip that appears above the table with smooth transition */}
+          <div className={`overflow-hidden transition-all duration-1000 ease-in-out ${showCalculationTooltip ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
+            }`}>
+            {showCalculationTooltip && (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl m-4 p-4">
+                <h4 className="font-medium text-blue-900 mb-2">📊 Hoe worden de berekeningen gemaakt?</h4>
+                <div className="text-sm text-blue-800 space-y-1">
+                  <div><strong>Bruto = Uren × Uurtarief</strong> (bijv. 2 uur × €10,00 = €20,00)</div>
+                  <div><strong>Netto = Bruto - Aftrekkingen</strong> (bijv. €20,00 - €2,00 = €18,00)</div>
+                  <div className="text-xs text-blue-600 mt-2">
+                    💡 Tip: Voeg uren toe met de groene "Uren Toevoegen" knop om positieve bedragen te zien
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="p-6">
             {calculations.length === 0 ? (
               <div className="text-center py-12">
@@ -851,109 +880,124 @@ function App() {
                 </button>
               </div>
             ) : (
-              <div className="space-y-4">
-                {/* Calculation Explanation */}
-                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-                  <h4 className="font-medium text-blue-900 mb-2">📊 Hoe worden de berekeningen gemaakt?</h4>
-                  <div className="text-sm text-blue-800 space-y-1">
-                    <div><strong>Bruto = Uren × Uurtarief</strong> (bijv. 2 uur × €10,00 = €20,00)</div>
-                    <div><strong>Netto = Bruto - Aftrekkingen</strong> (bijv. €20,00 - €2,00 = €18,00)</div>
-                    <div className="text-xs text-blue-600 mt-2">
-                      💡 Tip: Voeg uren toe met de groene "Uren Toevoegen" knop om positieve bedragen te zien
-                    </div>
-                  </div>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full">
+              <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-soft">
+                <table className="w-full border-collapse">
                   <thead>
-                    <tr className="border-b border-slate-200">
-                      <th className="text-left py-3 px-4 font-semibold text-slate-700">Naam</th>
-                      <th className="text-right py-3 px-4 font-semibold text-slate-700">Uren</th>
-                      <th className="text-right py-3 px-4 font-semibold text-slate-700">Tarief</th>
-                      <th className="text-right py-3 px-4 font-semibold text-slate-700">Bruto</th>
-                      <th className="text-right py-3 px-4 font-semibold text-slate-700">Aftrek</th>
-                      <th className="text-right py-3 px-4 font-semibold text-slate-700">Netto</th>
-                      <th className="text-center py-3 px-4 font-semibold text-slate-700">Acties</th>
+                    <tr className="bg-slate-50/80 backdrop-blur-sm">
+                      <th className="text-left py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r">
+                        <div className="flex items-center">
+                          <Users className="h-4 w-4 mr-2 text-primary-600" />
+                          Naam
+                        </div>
+                      </th>
+                      <th className="text-right py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r ">
+                        <div className="flex items-center justify-end">
+                          <Clock className="h-4 w-4 mr-2 text-blue-600" />
+                          Uren
+                        </div>
+                      </th>
+                      <th className="text-right py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r ">
+                        <div className="flex items-center justify-end">
+                          <Euro className="h-4 w-4 mr-2 text-green-600" />
+                          Tarief
+                        </div>
+                      </th>
+                      <th className="text-right py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r ">
+                        <div className="flex items-center justify-end">
+                          <FileText className="h-4 w-4 mr-2 text-blue-600" />
+                          Bruto
+                        </div>
+                      </th>
+                      <th className="text-right py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r ">
+                        <div className="flex items-center justify-end">
+                          <Trash2 className="h-4 w-4 mr-2 text-red-600" />
+                          Aftrek
+                        </div>
+                      </th>
+                      <th className="text-right py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r ">
+                        <div className="flex items-center justify-end">
+                          <Calculator className="h-4 w-4 mr-2 text-green-600" />
+                          Netto
+                        </div>
+                      </th>
+                      <th className="text-center py-4 px-6 font-semibold text-slate-700 border-b border-slate-200">
+                        <div className="flex items-center justify-center">
+                          <Edit className="h-4 w-4 mr-2 text-primary-600" />
+                          Acties
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {calculations.map((calc) => {
+                    {calculations.map((calc, index) => {
                       const profile = profiles.find(p => p.id === calc.profileId);
                       const hourlyRate = profile?.hourlyRate || 0;
                       const hasHours = calc.totalHours > 0;
-                      
+
                       return (
-                        <tr key={calc.profileId} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                          <td className="py-4 px-4">
-                            <div className="font-medium text-slate-900">{calc.profileName}</div>
+                        <tr
+                          key={calc.profileId}
+                          className={`transition-all duration-300 hover:bg-blue-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'
+                            }`}
+                        >
+                          <td className="py-4 px-6 border-b border-slate-200 border-r ">
+                            <div className="font-medium text-slate-900 flex items-center">
+                              <div className="w-3 h-3 bg-primary-500 rounded-full mr-3"></div>
+                              {calc.profileName}
+                            </div>
                             {!hasHours && (
-                              <div className="text-xs text-slate-500 mt-1">
+                              <div className="text-xs text-slate-500 mt-1 flex items-center">
+                                <Clock className="h-3 w-3 mr-1" />
                                 Geen uren ingevoerd
                               </div>
                             )}
                           </td>
-                          <td className="py-4 px-4 text-right">
-                            <div className="text-mono">
+                          <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
+                            <div className="text-mono font-semibold text-blue-700">
                               {formatHours(calc.totalHours)}
                             </div>
-                            {hasHours && (
-                              <div className="text-xs text-slate-500 mt-1">
-                                {calc.totalHours} × {formatCurrency(hourlyRate)}
-                              </div>
-                            )}
+                          
                           </td>
-                          <td className="py-4 px-4 text-right text-mono">
-                            {formatCurrency(hourlyRate)}
+                          <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
+                            <div className="text-mono font-medium text-green-700">
+                              {formatCurrency(hourlyRate)}
+                            </div>
                           </td>
-                          <td className="py-4 px-4 text-right">
-                            <div className="text-mono font-medium">
+                          <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
+                            <div className="text-mono font-bold text-blue-800">
                               {formatCurrency(calc.grossAmount)}
                             </div>
-                            {hasHours && (
-                              <div className="text-xs text-slate-500 mt-1">
-                                = {calc.totalHours} × {formatCurrency(hourlyRate)}
-                              </div>
-                            )}
+                           
                           </td>
-                          <td className="py-4 px-4 text-right">
-                            <div className="text-mono text-danger-600">
+                          <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
+                            <div className="text-mono font-semibold text-red-600">
                               -{formatCurrency(calc.totalDeductions)}
                             </div>
-                            {calc.totalDeductions > 0 && (
-                              <div className="text-xs text-slate-500 mt-1">
-                                Aftrekkingen
-                              </div>
-                            )}
+                          
                           </td>
-                          <td className="py-4 px-4 text-right">
-                            <div className={`text-mono font-semibold ${
-                              calc.netAmount >= 0 ? 'text-success-600' : 'text-danger-600'
-                            }`}>
+                          <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
+                            <div className={`text-mono font-bold text-lg ${calc.netAmount >= 0 ? 'text-green-700' : 'text-red-700'
+                              }`}>
                               {formatCurrency(calc.netAmount)}
                             </div>
-                            {hasHours && (
-                              <div className="text-xs text-slate-500 mt-1">
-                                = {formatCurrency(calc.grossAmount)} - {formatCurrency(calc.totalDeductions)}
-      </div>
-                            )}
+                            
                           </td>
-                          <td className="py-4 px-4 text-center">
+                          <td className="py-4 px-6 text-center border-b border-slate-200">
                             <div className="flex items-center justify-center space-x-2">
                               <button
-                                className="p-1 text-slate-400 hover:text-primary-600 transition-colors"
+                                className="p-2 bg-primary-100 rounded-lg text-primary-600 hover:bg-primary-200 hover:text-primary-700 transition-all duration-200 transform hover:scale-110"
                                 onClick={() => handleEditProfile(profiles.find(p => p.id === calc.profileId)!)}
                                 title="Profiel bewerken"
                               >
                                 <Edit className="h-4 w-4" />
                               </button>
                               <button
-                                className="p-1 text-slate-400 hover:text-danger-600 transition-colors"
+                                className="p-2 bg-red-100 rounded-lg text-red-600 hover:bg-red-200 hover:text-red-700 transition-all duration-200 transform hover:scale-110"
                                 onClick={() => handleDeleteProfile(calc.profileId)}
                                 title="Profiel verwijderen"
                               >
                                 <Trash2 className="h-4 w-4" />
-        </button>
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -961,11 +1005,83 @@ function App() {
                     })}
                   </tbody>
                 </table>
-                </div>
               </div>
             )}
           </div>
         </div>
+
+        {/* Profiles Selection Toast/Sidebar */}
+{showProfilesToast && (
+  <div className="fixed right-4 top-[139px] z-50 bg-white rounded-xl shadow-large border border-slate-200 w-80 max-h-96 overflow-hidden">
+    <div className="p-4 border-b border-slate-200">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-slate-900">Selecteer Profiel</h3>
+        <button
+          onClick={() => setShowProfilesToast(false)}
+          className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+
+      <div
+        className="p-4 border-t border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors"
+        onClick={() => {
+          setShowProfilesToast(false);
+          handleAddProfile();
+        }}
+      >
+        <div className="flex items-center space-x-2  text-primary-600">
+          <Plus className="h-4 w-4" />
+          <span className="font-medium">Nieuw profiel toevoegen</span>
+        </div>
+      </div>
+    </div>
+    
+    <div className="max-h-80 overflow-y-auto">
+      {profiles.map((profile) => (
+        <div
+          key={profile.id}
+          className="p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors"
+          onClick={() => {
+            setSelectedProfileForEdit(profile);
+            setEditingProfile(profile);
+            setProfileForm({
+              name: profile.name,
+              hourlyRate: profile.hourlyRate,
+              deductionType: profile.deductionType,
+              deductions: profile.deductions.map(d => ({
+                name: d.name,
+                amount: d.amount,
+                type: d.type,
+                priority: d.priority,
+              })),
+            });
+            setShowProfilesToast(false);
+            setIsProfileModalOpen(true);
+          }}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="w-3 h-3 bg-primary-500 rounded-full"></div>
+              <span className="font-medium text-slate-900">{profile.name}</span>
+            </div>
+            <div className="text-sm text-slate-500">
+              {formatCurrency(profile.hourlyRate)}/uur
+            </div>
+          </div>
+          <div className="mt-2 text-xs text-slate-500">
+            {profile.deductions.length} aftrekking{profile.deductions.length !== 1 ? 'en' : ''}
+          </div>
+        </div>
+      ))}
+      
+      {/* Add New Profile Button */}
+      
+    </div>
+  </div>
+)}
       </main>
 
       {/* Profile Management Modal */}
@@ -981,8 +1097,8 @@ function App() {
                   </h2>
                   <p className="text-sm text-slate-500 mt-1">
                     {editingProfile ? 'Bewerk de profielgegevens' : 'Voeg een nieuw profiel toe'}
-        </p>
-      </div>
+                  </p>
+                </div>
                 <button
                   className="ml-4 -mr-2 inline-flex items-center justify-center rounded-xl px-2 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus:ring-slate-500"
                   onClick={() => setIsProfileModalOpen(false)}
@@ -1019,9 +1135,9 @@ function App() {
                         value={profileForm.hourlyRate || ''}
                         onChange={(e) => {
                           const value = e.target.value;
-                          setProfileForm({ 
-                            ...profileForm, 
-                            hourlyRate: value === '' ? 0 : parseFloat(value) || 0 
+                          setProfileForm({
+                            ...profileForm,
+                            hourlyRate: value === '' ? 0 : parseFloat(value) || 0
                           });
                         }}
                       />
@@ -1074,7 +1190,7 @@ function App() {
                         Toevoegen
                       </button>
                     </div>
-                    
+
                     {profileForm.deductions.map((deduction, index) => (
                       <div key={index} className="flex items-center space-x-3 mb-3 p-3 bg-slate-50 rounded-xl">
                         <input
@@ -1123,6 +1239,8 @@ function App() {
                     >
                       Annuleren
                     </button>
+
+
                     <button
                       className="inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-primary-600 text-white shadow-soft hover:bg-primary-700 hover:shadow-medium focus:ring-primary-500 active:scale-95"
                       onClick={handleSaveProfile}
@@ -1204,9 +1322,9 @@ function App() {
                       value={hoursForm.hours || ''}
                       onChange={(e) => {
                         const value = e.target.value;
-                        setHoursForm({ 
-                          ...hoursForm, 
-                          hours: value === '' ? 0 : parseFloat(value) || 0 
+                        setHoursForm({
+                          ...hoursForm,
+                          hours: value === '' ? 0 : parseFloat(value) || 0
                         });
                       }}
                     />
