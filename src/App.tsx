@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calculator, Users, Euro, FileText, Download, Upload, Plus, Edit, Trash2, X, Clock, Calendar } from 'lucide-react';
+import { Calculator, Users, Euro, FileText, Download, Upload, Plus, Trash2, X, Clock, Calendar } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { FaQuestionCircle } from 'react-icons/fa';
 
@@ -20,6 +20,7 @@ interface Deduction {
   amount: number;
   type: 'percentage' | 'fixed';
   priority: number;
+  appliesTo: 'employee' | 'employer' | 'both'; // Added appliesTo field
 }
 
 interface HoursEntry {
@@ -62,7 +63,6 @@ interface PaymentDistribution {
 
 function App() {
   const [showCalculationTooltip, setShowCalculationTooltip] = useState(false);
-
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [hoursEntries, setHoursEntries] = useState<HoursEntry[]>([]);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -71,16 +71,14 @@ function App() {
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [calculations, setCalculations] = useState<CalculationResult[]>([]);
+  const [appliedDeductions, setAppliedDeductions] = useState<Record<string, boolean>>({});
   const [clientPayment, setClientPayment] = useState<ClientPayment>({
     totalAmount: 0,
     totalHours: 0,
     averageRate: 0,
   });
   const [paymentDistribution, setPaymentDistribution] = useState<PaymentDistribution[]>([]);
-
-
   const [showProfilesToast, setShowProfilesToast] = useState(false);
-  // const [selectedProfileForEdit, setSelectedProfileForEdit] = useState<Profile | null>(null);
 
   // Profile form state
   const [profileForm, setProfileForm] = useState({
@@ -101,6 +99,7 @@ function App() {
   useEffect(() => {
     const savedProfiles = localStorage.getItem('urenregistratie-profiles');
     const savedHours = localStorage.getItem('urenregistratie-hours');
+    const savedAppliedDeductions = localStorage.getItem('urenregistratie-applied-deductions');
 
     if (savedProfiles) {
       try {
@@ -126,9 +125,17 @@ function App() {
         console.error('Error loading hours:', error);
       }
     }
+
+    if (savedAppliedDeductions) {
+      try {
+        setAppliedDeductions(JSON.parse(savedAppliedDeductions));
+      } catch (error) {
+        console.error('Error loading applied deductions:', error);
+      }
+    }
   }, []);
 
-  // Save data to localStorage whenever profiles or hours change
+  // Save data to localStorage whenever profiles, hours or applied deductions change
   useEffect(() => {
     if (profiles.length > 0) {
       localStorage.setItem('urenregistratie-profiles', JSON.stringify(profiles));
@@ -141,10 +148,34 @@ function App() {
     }
   }, [hoursEntries]);
 
+  useEffect(() => {
+    if (Object.keys(appliedDeductions).length > 0) {
+      localStorage.setItem('urenregistratie-applied-deductions', JSON.stringify(appliedDeductions));
+    }
+  }, [appliedDeductions]);
+
+  // Initialize applied deductions when profiles change
+  useEffect(() => {
+    if (profiles.length > 0) {
+      const newAppliedDeductions: Record<string, boolean> = { ...appliedDeductions };
+
+      profiles.forEach(profile => {
+        profile.deductions.forEach(deduction => {
+          const deductionKey = `${profile.id}-${deduction.id}`;
+          if (newAppliedDeductions[deductionKey] === undefined) {
+            newAppliedDeductions[deductionKey] = true; // Default to applied
+          }
+        });
+      });
+
+      setAppliedDeductions(newAppliedDeductions);
+    }
+  }, [profiles]);
+
   // Calculate totals whenever data changes
   useEffect(() => {
     calculateTotals();
-  }, [profiles, hoursEntries]);
+  }, [profiles, hoursEntries, appliedDeductions]);
 
   const calculateTotals = () => {
     // Group hours by profile
@@ -166,9 +197,15 @@ function App() {
       const deductionBreakdown = profile.deductions
         .sort((a, b) => a.priority - b.priority)
         .map(deduction => {
-          const amount = deduction.type === 'percentage'
-            ? (grossAmount * deduction.amount) / 100
-            : deduction.amount;
+          const deductionKey = `${profile.id}-${deduction.id}`;
+          const isApplied = appliedDeductions[deductionKey] !== false;
+
+          const amount = isApplied
+            ? (deduction.type === 'percentage'
+              ? (grossAmount * deduction.amount) / 100
+              : deduction.amount)
+            : 0;
+
           totalDeductions += amount;
           return {
             deductionId: deduction.id,
@@ -213,6 +250,14 @@ function App() {
     setPaymentDistribution(distribution);
   };
 
+  const toggleDeduction = (profileId: string, deductionId: string) => {
+    const deductionKey = `${profileId}-${deductionId}`;
+    setAppliedDeductions(prev => ({
+      ...prev,
+      [deductionKey]: !prev[deductionKey]
+    }));
+  };
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -239,21 +284,22 @@ function App() {
     setIsProfileModalOpen(true);
   };
 
-  const handleEditProfile = (profile: Profile) => {
-    setEditingProfile(profile);
-    setProfileForm({
-      name: profile.name,
-      hourlyRate: profile.hourlyRate,
-      deductionType: profile.deductionType,
-      deductions: profile.deductions.map(d => ({
-        name: d.name,
-        amount: d.amount,
-        type: d.type,
-        priority: d.priority,
-      })),
-    });
-    setIsProfileModalOpen(true);
-  };
+  // const handleEditProfile = (profile: Profile) => {
+  //   setEditingProfile(profile);
+  //   setProfileForm({
+  //     name: profile.name,
+  //     hourlyRate: profile.hourlyRate,
+  //     deductionType: profile.deductionType,
+  //     deductions: profile.deductions.map(d => ({
+  //       name: d.name,
+  //       amount: d.amount,
+  //       type: d.type,
+  //       priority: d.priority,
+  //       appliesTo: d.appliesTo,
+  //     })),
+  //   });
+  //   setIsProfileModalOpen(true);
+  // };
 
   const handleSaveProfile = () => {
     if (!profileForm.name.trim() || profileForm.hourlyRate <= 0) {
@@ -267,9 +313,10 @@ function App() {
       hourlyRate: profileForm.hourlyRate,
       deductionType: profileForm.deductionType,
       deductions: profileForm.deductions.map((d, index) => ({
-        id: generateId(),
+        id: editingProfile?.deductions[index]?.id || generateId(),
         ...d,
         priority: index,
+        appliesTo: d.appliesTo || 'employee', // Default to employee
       })),
       createdAt: editingProfile?.createdAt || new Date(),
       updatedAt: new Date(),
@@ -285,28 +332,28 @@ function App() {
     setEditingProfile(null);
   };
 
-  const handleDeleteProfile = (profileId: string) => {
-    if (confirm('Weet je zeker dat je dit profiel wilt verwijderen?')) {
-      const newProfiles = profiles.filter(p => p.id !== profileId);
-      const newHoursEntries = hoursEntries.filter(h => h.profileId !== profileId);
+  // const handleDeleteProfile = (profileId: string) => {
+  //   if (confirm('Weet je zeker dat je dit profiel wilt verwijderen?')) {
+  //     const newProfiles = profiles.filter(p => p.id !== profileId);
+  //     const newHoursEntries = hoursEntries.filter(h => h.profileId !== profileId);
 
-      setProfiles(newProfiles);
-      setHoursEntries(newHoursEntries);
+  //     setProfiles(newProfiles);
+  //     setHoursEntries(newHoursEntries);
 
-      // Update localStorage
-      if (newProfiles.length === 0) {
-        localStorage.removeItem('urenregistratie-profiles');
-      } else {
-        localStorage.setItem('urenregistratie-profiles', JSON.stringify(newProfiles));
-      }
+  //     // Update localStorage
+  //     if (newProfiles.length === 0) {
+  //       localStorage.removeItem('urenregistratie-profiles');
+  //     } else {
+  //       localStorage.setItem('urenregistratie-profiles', JSON.stringify(newProfiles));
+  //     }
 
-      if (newHoursEntries.length === 0) {
-        localStorage.removeItem('urenregistratie-hours');
-      } else {
-        localStorage.setItem('urenregistratie-hours', JSON.stringify(newHoursEntries));
-      }
-    }
-  };
+  //     if (newHoursEntries.length === 0) {
+  //       localStorage.removeItem('urenregistratie-hours');
+  //     } else {
+  //       localStorage.setItem('urenregistratie-hours', JSON.stringify(newHoursEntries));
+  //     }
+  //   }
+  // };
 
   const addDeduction = () => {
     setProfileForm({
@@ -318,6 +365,7 @@ function App() {
           amount: 0,
           type: 'percentage',
           priority: profileForm.deductions.length,
+          appliesTo: 'employee',
         },
       ],
     });
@@ -372,7 +420,6 @@ function App() {
       description: '',
     });
   };
-
 
   const getHoursForDate = (date: string) => {
     return hoursEntries.filter(entry =>
@@ -739,12 +786,14 @@ function App() {
           </div>
 
           {/* Payment Distribution Card */}
+          {/* Payment Distribution Card */}
           <div className="bg-white rounded-2xl shadow-medium border border-slate-200/50 overflow-hidden">
             <div className="flex flex-col space-y-1.5 pb-4 p-6">
               <h3 className="text-xl font-semibold text-slate-900 tracking-tight flex items-center space-x-2">
                 <FileText className="h-5 w-5 text-primary-600" />
                 <span>Uitbetalingen</span>
               </h3>
+              <p className="text-sm text-slate-500">Top 5 laatst bijgewerkte profielen</p>
             </div>
             <div className="p-6">
               <div className="space-y-3">
@@ -754,24 +803,120 @@ function App() {
                     <p className="text-sm text-slate-500">Geen profielen toegevoegd</p>
                   </div>
                 ) : (
-                  paymentDistribution.map((payment) => (
-                    <div key={payment.profileId} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-                      <div>
-                        <div className="font-medium text-slate-900">{payment.profileName}</div>
-                        <div className="text-xs text-slate-500">{payment.percentage.toFixed(1)}%</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-semibold text-slate-900">
-                          {formatCurrency(payment.amount)}
+                  // Sort by updatedAt date and take top 5
+                  paymentDistribution
+                    .map(payment => {
+                      const profile = profiles.find(p => p.id === payment.profileId);
+                      return {
+                        ...payment,
+                        updatedAt: profile?.updatedAt || new Date(0)
+                      };
+                    })
+                    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+                    .slice(0, 5)
+                    .map((payment) => {
+                      const profile = profiles.find(p => p.id === payment.profileId);
+                      const updatedDate = profile?.updatedAt ? new Date(profile.updatedAt) : null;
+
+                      return (
+                        <div key={payment.profileId} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                          <div>
+                            <div className="font-medium text-slate-900">{payment.profileName}</div>
+                            <div className="text-xs text-slate-500">
+                              {payment.percentage.toFixed(1)}% •
+                              {updatedDate ? ` Bijgewerkt: ${updatedDate.toLocaleDateString('nl-NL')}` : ' Niet bijgewerkt'}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-semibold text-slate-900">
+                              {formatCurrency(payment.amount)}
+                            </div>
+                            {updatedDate && (
+                              <div className="text-xs text-slate-400 mt-1">
+                                {updatedDate.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                  ))
+                      );
+                    })
                 )}
               </div>
+
+              {/* Show "View All" button if there are more than 5 profiles */}
+              {paymentDistribution.length > 5 && (
+                <div className="mt-4 pt-4 border-t border-slate-200">
+                  <button
+                    className="w-full text-center text-sm text-primary-600 hover:text-primary-700 font-medium"
+                    onClick={() => {
+                      // You can implement a function to show all profiles here
+                      setShowProfilesToast(true);
+                    }}
+                  >
+                    Alle {paymentDistribution.length} profielen bekijken →
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
+
+        {/* Deductions Toggle Section */}
+        {profiles.some(profile => profile.deductions.length > 0) && (
+          <div className="bg-white rounded-2xl shadow-medium border border-slate-200/50 overflow-hidden mb-6">
+            <div className="flex flex-col space-y-1.5 pb-4 p-6">
+              <h3 className="text-xl font-semibold text-slate-900 tracking-tight flex items-center space-x-2">
+                <Calculator className="h-5 w-5 text-primary-600" />
+                <span>Aftrekkingen Toepassen</span>
+              </h3>
+              <p className="text-sm text-slate-500">Selecteer welke aftrekkingen worden toegepast in de berekeningen</p>
+            </div>
+            <div className="p-6">
+              <div className="space-y-4">
+                {profiles.map(profile => (
+                  profile.deductions.length > 0 && (
+                    <div key={profile.id} className="border-b border-slate-200 pb-4 last:border-b-0 last:pb-0">
+                      <h4 className="font-medium text-slate-900 mb-3 flex items-center">
+                        <div className="w-3 h-3 bg-primary-500 rounded-full mr-2"></div>
+                        {profile.name}
+                      </h4>
+                      <div className="space-y-2">
+                        {profile.deductions.map(deduction => {
+                          const deductionKey = `${profile.id}-${deduction.id}`;
+                          const isApplied = appliedDeductions[deductionKey] !== false;
+
+                          return (
+                            <div key={deduction.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                              <div>
+                                <span className="font-medium">{deduction.name}</span>
+                                <span className="text-sm text-slate-500 ml-2">
+                                  ({deduction.amount} {deduction.type === 'percentage' ? '%' : '€'})
+                                </span>
+                                <span className="text-xs text-slate-400 ml-2">
+                                  {deduction.appliesTo === 'employee' ? 'Werknemer' :
+                                    deduction.appliesTo === 'employer' ? 'Werkgever' : 'Beide'}
+                                </span>
+                              </div>
+                              <label className="relative inline-flex items-center cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={isApplied}
+                                  onChange={() => toggleDeduction(profile.id, deduction.id)}
+                                  className="sr-only peer"
+                                />
+                                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+                              </label>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Daily Hours Overview */}
         {hoursEntries.length > 0 && (
@@ -822,7 +967,6 @@ function App() {
           </div>
         )}
 
-
         {/* Middle Section - People & Hours */}
         <div className="bg-white rounded-2xl shadow-medium border border-slate-200/50 overflow-hidden">
           <div className="flex flex-col space-y-1.5 pb-4 p-6">
@@ -830,10 +974,7 @@ function App() {
               <div className="flex items-center space-x-2">
                 <h3 className="text-xl font-semibold text-slate-900 tracking-tight flex items-center space-x-2">
                   <Users className="h-5 w-5 text-primary-600" />
-                  <span
-
-                    className="cursor-help border-b border-dashed border-slate-300 text-green-500"
-                  >
+                  <span className="cursor-help border-b border-dashed border-slate-300 text-green-500">
                     Personen & Uren
                   </span>
                   <FaQuestionCircle className='text-xl mr-1 text-blue-500'
@@ -843,14 +984,13 @@ function App() {
               </div>
 
               <div className="flex items-center space-x-3">
-
+                {/* Empty space for alignment */}
               </div>
             </div>
           </div>
 
           {/* Tooltip that appears above the table with smooth transition */}
-          <div className={`overflow-hidden transition-all duration-1000 ease-in-out ${showCalculationTooltip ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
-            }`}>
+          <div className={`overflow-hidden transition-all duration-1000 ease-in-out ${showCalculationTooltip ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
             {showCalculationTooltip && (
               <div className="bg-blue-50 border border-blue-200 rounded-xl m-4 p-4">
                 <h4 className="font-medium text-blue-900 mb-2">📊 Hoe worden de berekeningen gemaakt?</h4>
@@ -920,12 +1060,6 @@ function App() {
                           Netto
                         </div>
                       </th>
-                      <th className="text-center py-4 px-6 font-semibold text-slate-700 border-b border-slate-200">
-                        <div className="flex items-center justify-center">
-                          <Edit className="h-4 w-4 mr-2 text-primary-600" />
-                          Acties
-                        </div>
-                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -937,8 +1071,7 @@ function App() {
                       return (
                         <tr
                           key={calc.profileId}
-                          className={`transition-all duration-300 hover:bg-blue-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'
-                            }`}
+                          className={`transition-all duration-300 hover:bg-blue-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}
                         >
                           <td className="py-4 px-6 border-b border-slate-200 border-r ">
                             <div className="font-medium text-slate-900 flex items-center">
@@ -956,7 +1089,6 @@ function App() {
                             <div className="text-mono font-semibold text-blue-700">
                               {formatHours(calc.totalHours)}
                             </div>
-                          
                           </td>
                           <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
                             <div className="text-mono font-medium text-green-700">
@@ -967,37 +1099,15 @@ function App() {
                             <div className="text-mono font-bold text-blue-800">
                               {formatCurrency(calc.grossAmount)}
                             </div>
-                           
                           </td>
                           <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
                             <div className="text-mono font-semibold text-red-600">
                               -{formatCurrency(calc.totalDeductions)}
                             </div>
-                          
                           </td>
                           <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
-                            <div className={`text-mono font-bold text-lg ${calc.netAmount >= 0 ? 'text-green-700' : 'text-red-700'
-                              }`}>
+                            <div className={`text-mono font-bold text-lg ${calc.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                               {formatCurrency(calc.netAmount)}
-                            </div>
-                            
-                          </td>
-                          <td className="py-4 px-6 text-center border-b border-slate-200">
-                            <div className="flex items-center justify-center space-x-2">
-                              <button
-                                className="p-2 bg-primary-100 rounded-lg text-primary-600 hover:bg-primary-200 hover:text-primary-700 transition-all duration-200 transform hover:scale-110"
-                                onClick={() => handleEditProfile(profiles.find(p => p.id === calc.profileId)!)}
-                                title="Profiel bewerken"
-                              >
-                                <Edit className="h-4 w-4" />
-                              </button>
-                              <button
-                                className="p-2 bg-red-100 rounded-lg text-red-600 hover:bg-red-200 hover:text-red-700 transition-all duration-200 transform hover:scale-110"
-                                onClick={() => handleDeleteProfile(calc.profileId)}
-                                title="Profiel verwijderen"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
                             </div>
                           </td>
                         </tr>
@@ -1011,77 +1121,75 @@ function App() {
         </div>
 
         {/* Profiles Selection Toast/Sidebar */}
-{showProfilesToast && (
-  <div className="fixed right-4 top-[139px] z-50 bg-white rounded-xl shadow-large border border-slate-200 w-80 max-h-96 overflow-hidden">
-    <div className="p-4 border-b border-slate-200">
-      <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-slate-900">Selecteer Profiel</h3>
-        <button
-          onClick={() => setShowProfilesToast(false)}
-          className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
-
-      <div
-        className="p-4 border-t border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors"
-        onClick={() => {
-          setShowProfilesToast(false);
-          handleAddProfile();
-        }}
-      >
-        <div className="flex items-center space-x-2  text-primary-600">
-          <Plus className="h-4 w-4" />
-          <span className="font-medium">Nieuw profiel toevoegen</span>
-        </div>
-      </div>
-    </div>
-    
-    <div className="max-h-80 overflow-y-auto">
-      {profiles.map((profile) => (
-        <div
-          key={profile.id}
-          className="p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors"
-          onClick={() => {
-         
-            setEditingProfile(profile);
-            setProfileForm({
-              name: profile.name,
-              hourlyRate: profile.hourlyRate,
-              deductionType: profile.deductionType,
-              deductions: profile.deductions.map(d => ({
-                name: d.name,
-                amount: d.amount,
-                type: d.type,
-                priority: d.priority,
-              })),
-            });
-            setShowProfilesToast(false);
-            setIsProfileModalOpen(true);
-          }}
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="w-3 h-3 bg-primary-500 rounded-full"></div>
-              <span className="font-medium text-slate-900">{profile.name}</span>
+        {showProfilesToast && (
+          <div className="fixed right-4 top-[139px] z-50 bg-white rounded-xl shadow-large border border-slate-200 w-80 max-h-96 overflow-hidden">
+            <div className="p-4 border-b border-slate-200">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-slate-900">Selecteer Profiel</h3>
+                <button
+                  onClick={() => setShowProfilesToast(false)}
+                  className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
-            <div className="text-sm text-slate-500">
-              {formatCurrency(profile.hourlyRate)}/uur
+
+            <div className="max-h-80 overflow-y-auto">
+              {/* Add New Profile Button */}
+              <div
+                className="p-4 border-t border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors"
+                onClick={() => {
+                  setShowProfilesToast(false);
+                  handleAddProfile();
+                }}
+              >
+                <div className="flex items-center space-x-2  text-primary-600">
+                  <Plus className="h-4 w-4" />
+                  <span className="font-medium">Nieuw profiel toevoegen</span>
+                </div>
+              </div>  
+              {profiles.map((profile) => (
+                <div
+                  key={profile.id}
+                  className="p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors"
+                  onClick={() => {
+                    setEditingProfile(profile);
+                    setProfileForm({
+                      name: profile.name,
+                      hourlyRate: profile.hourlyRate,
+                      deductionType: profile.deductionType,
+                      deductions: profile.deductions.map(d => ({
+                        name: d.name,
+                        amount: d.amount,
+                        type: d.type,
+                        priority: d.priority,
+                        appliesTo: d.appliesTo,
+                      })),
+                    });
+                    setShowProfilesToast(false);
+                    setIsProfileModalOpen(true);
+                  }}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-3 h-3 bg-primary-500 rounded-full"></div>
+                      <span className="font-medium text-slate-900">{profile.name}</span>
+                    </div>
+                    <div className="text-sm text-slate-500">
+                      {formatCurrency(profile.hourlyRate)}/uur
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-slate-500">
+                    {profile.deductions.length} aftrekking{profile.deductions.length !== 1 ? 'en' : ''}
+                  </div>
+                </div>
+              ))}
+
+              
             </div>
           </div>
-          <div className="mt-2 text-xs text-slate-500">
-            {profile.deductions.length} aftrekking{profile.deductions.length !== 1 ? 'en' : ''}
-          </div>
-        </div>
-      ))}
-      
-      {/* Add New Profile Button */}
-      
-    </div>
-  </div>
-)}
+        )}
       </main>
 
       {/* Profile Management Modal */}
@@ -1109,7 +1217,7 @@ function App() {
               <div className="p-6">
                 <div className="space-y-6">
                   {/* Basic Info */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-2">
                         Naam *
@@ -1126,21 +1234,58 @@ function App() {
                       <label className="block text-sm font-medium text-slate-700 mb-2">
                         Uurtarief (€) *
                       </label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        className="block w-full rounded-xl border-0 bg-white px-4 py-3 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
-                        placeholder="0.00"
-                        value={profileForm.hourlyRate || ''}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          setProfileForm({
-                            ...profileForm,
-                            hourlyRate: value === '' ? 0 : parseFloat(value) || 0
-                          });
-                        }}
-                      />
+                      <div className="relative">
+                        <select
+                          className="block w-full rounded-xl border-0 bg-white px-4 py-3 text-slate-900 shadow-soft ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200 appearance-none"
+                          value={profileForm.hourlyRate}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            if (value === 'custom') {
+                              setProfileForm({
+                                ...profileForm,
+                                hourlyRate: 0
+                              });
+                            } else {
+                              setProfileForm({
+                                ...profileForm,
+                                hourlyRate: parseFloat(value) || 0
+                              });
+                            }
+                          }}
+                        >
+                          <option value="10">€10,00</option>
+                          <option value="20">€20,00</option>
+                          <option value="30">€30,00</option>
+                          <option value="40">€40,00</option>
+                          <option value="custom">Aangepast bedrag...</option>
+                        </select>
+                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path>
+                          </svg>
+                        </div>
+                      </div>
+
+                      {/* Show custom input when a predefined option is not selected */}
+                      {![10, 20, 30, 40].includes(profileForm.hourlyRate) && (
+                        <div className="mt-2">
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="block w-full rounded-xl border-0 bg-white px-4 py-3 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
+                            placeholder="0.00"
+                            value={profileForm.hourlyRate || ''}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setProfileForm({
+                                ...profileForm,
+                                hourlyRate: value === '' ? 0 : parseFloat(value) || 0
+                              });
+                            }}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1192,41 +1337,81 @@ function App() {
                     </div>
 
                     {profileForm.deductions.map((deduction, index) => (
-                      <div key={index} className="flex items-center space-x-3 mb-3 p-3 bg-slate-50 rounded-xl">
-                        <input
-                          type="text"
-                          placeholder="Naam aftrekking"
-                          className="flex-1 rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
-                          value={deduction.name}
-                          onChange={(e) => updateDeduction(index, 'name', e.target.value)}
-                        />
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          placeholder="Bedrag"
-                          className="w-24 rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
-                          value={deduction.amount || ''}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            updateDeduction(index, 'amount', value === '' ? 0 : parseFloat(value) || 0);
-                          }}
-                        />
-                        <select
-                          className="rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
-                          value={deduction.type}
-                          onChange={(e) => updateDeduction(index, 'type', e.target.value)}
-                        >
-                          <option value="percentage">%</option>
-                          <option value="fixed">€</option>
-                        </select>
-                        <button
-                          type="button"
-                          className="p-2 text-slate-400 hover:text-danger-600 transition-colors"
-                          onClick={() => removeDeduction(index)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                      <div key={index} className="flex flex-col space-y-3 mb-4 p-3 bg-slate-50 rounded-xl">
+                        <div className="flex items-center space-x-3">
+                          <input
+                            type="text"
+                            placeholder="Naam aftrekking"
+                            className="flex-1 rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
+                            value={deduction.name}
+                            onChange={(e) => updateDeduction(index, 'name', e.target.value)}
+                          />
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="Bedrag"
+                            className="w-24 rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
+                            value={deduction.amount || ''}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              updateDeduction(index, 'amount', value === '' ? 0 : parseFloat(value) || 0);
+                            }}
+                          />
+                          <select
+                            className="rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
+                            value={deduction.type}
+                            onChange={(e) => updateDeduction(index, 'type', e.target.value)}
+                          >
+                            <option value="percentage">%</option>
+                            <option value="fixed">€</option>
+                          </select>
+                          <button
+                            type="button"
+                            className="p-2 text-slate-400 hover:text-danger-600 transition-colors"
+                            onClick={() => removeDeduction(index)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        {/* Who does this deduction apply to? */}
+                        <div className="flex items-center space-x-4 pl-2">
+                          <span className="text-sm text-slate-600">Van toepassing op:</span>
+                          <label className="flex items-center">
+                            <input
+                              type="radio"
+                              name={`deduction-applies-to-${index}`}
+                              value="employee"
+                              checked={deduction.appliesTo === 'employee'}
+                              onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
+                              className="mr-2"
+                            />
+                            Werknemer
+                          </label>
+                          <label className="flex items-center">
+                            <input
+                              type="radio"
+                              name={`deduction-applies-to-${index}`}
+                              value="employer"
+                              checked={deduction.appliesTo === 'employer'}
+                              onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
+                              className="mr-2"
+                            />
+                            Werkgever
+                          </label>
+                          <label className="flex items-center">
+                            <input
+                              type="radio"
+                              name={`deduction-applies-to-${index}`}
+                              value="both"
+                              checked={deduction.appliesTo === 'both'}
+                              onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
+                              className="mr-2"
+                            />
+                            Beide
+                          </label>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1239,7 +1424,6 @@ function App() {
                     >
                       Annuleren
                     </button>
-
 
                     <button
                       className="inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-primary-600 text-white shadow-soft hover:bg-primary-700 hover:shadow-medium focus:ring-primary-500 active:scale-95"
@@ -1382,13 +1566,12 @@ function App() {
           </div>
         </div>
       )}
-
-      {/* Export/Import Modal */}
       {isExportModalOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity" />
           <div className="flex min-h-full items-center justify-center p-4">
-            <div className="relative w-full max-w-lg bg-white rounded-2xl shadow-large">
+            <div className="relative w-full max-w-lg bg-white rounded-2xl shadow-large animate-fadeIn">
+              {/* Header */}
               <div className="flex items-center justify-between p-6 border-b border-slate-200">
                 <div className="flex-1">
                   <h2 className="text-2xl font-semibold text-slate-900 tracking-tight">Export & Import</h2>
@@ -1401,20 +1584,32 @@ function App() {
                   <X className="h-4 w-4" />
                 </button>
               </div>
+
+              {/* Body */}
               <div className="p-6">
                 <div className="space-y-4">
                   {/* PDF Export */}
-                  <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
+                  <div className="p-4 bg-red-50 border border-red-200 rounded-xl transition-all duration-300 hover:shadow-md hover:scale-[1.01]">
                     <div className="flex items-center space-x-3">
-                      <FileText className="h-8 w-8 text-red-600" />
+                      <FileText className="h-8 w-8 text-red-600 animate-pulse" />
                       <div className="flex-1">
                         <h3 className="font-medium text-red-900">PDF Rapport</h3>
-                        <p className="text-sm text-red-700">Exporteer een professioneel PDF rapport</p>
+                        <p className="text-sm text-red-700">
+                          Exporteer een professioneel PDF rapport met overzichtelijke tabellen
+                        </p>
+                        <p className="text-xs text-red-500 italic mt-1">
+                          📄 Inclusief samenvatting & profielen
+                        </p>
                       </div>
                       <button
-                        className="inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-red-600 text-white shadow-soft hover:bg-red-700 hover:shadow-medium focus:ring-red-500 active:scale-95"
+                        className={`inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none shadow-soft active:scale-95
+                    ${calculations.length === 0
+                            ? "bg-red-200 text-red-500 cursor-not-allowed"
+                            : "bg-red-600 text-white hover:bg-red-700 hover:shadow-medium focus:ring-red-500 animate-bounceOnce"
+                          }`}
                         onClick={generatePDF}
                         disabled={calculations.length === 0}
+                        title={calculations.length === 0 ? "Voeg profielen toe om PDF te exporteren" : "Download PDF"}
                       >
                         <FileText className="h-4 w-4 mr-2" />
                         Export PDF
@@ -1423,7 +1618,7 @@ function App() {
                   </div>
 
                   {/* JSON Export */}
-                  <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                  <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl transition-all duration-300 hover:shadow-md hover:scale-[1.01]">
                     <div className="flex items-center space-x-3">
                       <Download className="h-8 w-8 text-blue-600" />
                       <div className="flex-1">
@@ -1431,7 +1626,7 @@ function App() {
                         <p className="text-sm text-blue-700">Exporteer alle data als JSON bestand</p>
                       </div>
                       <button
-                        className="inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-blue-600 text-white shadow-soft hover:bg-blue-700 hover:shadow-medium focus:ring-blue-500 active:scale-95"
+                        className="inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 bg-blue-600 text-white shadow-soft hover:bg-blue-700 hover:shadow-medium focus:ring-blue-500 active:scale-95"
                         onClick={exportData}
                       >
                         <Download className="h-4 w-4 mr-2" />
@@ -1441,14 +1636,14 @@ function App() {
                   </div>
 
                   {/* JSON Import */}
-                  <div className="p-4 bg-green-50 border border-green-200 rounded-xl">
+                  <div className="p-4 bg-green-50 border border-green-200 rounded-xl transition-all duration-300 hover:shadow-md hover:scale-[1.01]">
                     <div className="flex items-center space-x-3">
                       <Upload className="h-8 w-8 text-green-600" />
                       <div className="flex-1">
                         <h3 className="font-medium text-green-900">JSON Import</h3>
                         <p className="text-sm text-green-700">Importeer data uit een JSON backup</p>
                       </div>
-                      <label className="inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-green-600 text-white shadow-soft hover:bg-green-700 hover:shadow-medium focus:ring-green-500 active:scale-95 cursor-pointer">
+                      <label className="inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 bg-green-600 text-white shadow-soft hover:bg-green-700 hover:shadow-medium focus:ring-green-500 active:scale-95 cursor-pointer">
                         <Upload className="h-4 w-4 mr-2" />
                         Import JSON
                         <input
@@ -1476,6 +1671,7 @@ function App() {
           </div>
         </div>
       )}
+
     </div>
   );
 }
