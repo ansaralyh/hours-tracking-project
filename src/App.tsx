@@ -80,7 +80,7 @@ function App() {
 
 
   const [showProfilesToast, setShowProfilesToast] = useState(false);
-  const [selectedProfileForEdit, setSelectedProfileForEdit] = useState<Profile | null>(null);
+  // const [selectedProfileForEdit, setSelectedProfileForEdit] = useState<Profile | null>(null);
 
   // Profile form state
   const [profileForm, setProfileForm] = useState({
@@ -1045,7 +1045,7 @@ function App() {
           key={profile.id}
           className="p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors"
           onClick={() => {
-            setSelectedProfileForEdit(profile);
+         
             setEditingProfile(profile);
             setProfileForm({
               name: profile.name,
