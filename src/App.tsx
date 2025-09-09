@@ -4,10 +4,16 @@ import jsPDF from 'jspdf';
 import { FaQuestionCircle } from 'react-icons/fa';
 
 // Types
+interface HourlyRate {
+  id: string;
+  label: string;
+  rate: number;
+}
+
 interface Profile {
   id: string;
   name: string;
-  hourlyRate: number;
+  hourlyRates: HourlyRate[];
   deductionType: 'Uurloon' | 'Marge';
   deductions: Deduction[];
   createdAt: Date;
@@ -26,6 +32,7 @@ interface Deduction {
 interface HoursEntry {
   id: string;
   profileId: string;
+  hourlyRateId: string;
   date: Date;
   hours: number;
   description?: string;
@@ -82,10 +89,14 @@ function App() {
   const [paymentDistribution, setPaymentDistribution] = useState<PaymentDistribution[]>([]);
   const [showProfilesToast, setShowProfilesToast] = useState(false);
 
+  const generateId = () => {
+    return Math.random().toString(36).substr(2, 9);
+  };
+
   // Profile form state
   const [profileForm, setProfileForm] = useState({
     name: '',
-    hourlyRate: 0,
+    hourlyRates: [] as Omit<HourlyRate, 'id'>[],
     deductionType: 'Uurloon' as 'Uurloon' | 'Marge',
     deductions: [] as Omit<Deduction, 'id'>[],
   });
@@ -93,6 +104,7 @@ function App() {
   // Hours form state
   const [hoursForm, setHoursForm] = useState({
     profileId: '',
+    hourlyRateId: '',
     hours: 0,
     description: '',
   });
@@ -105,8 +117,14 @@ function App() {
 
     if (savedProfiles) {
       try {
-        const parsedProfiles = JSON.parse(savedProfiles).map((profile: any) => ({
+        const parsedProfiles = JSON.parse(savedProfiles).map((profile: Profile & { hourlyRate?: number }) => ({
           ...profile,
+          // Migrate old single hourlyRate to hourlyRates array
+          hourlyRates: profile.hourlyRates || (profile.hourlyRate ? [{
+            id: generateId(),
+            label: 'Standard Rate',
+            rate: profile.hourlyRate
+          }] : []),
           createdAt: new Date(profile.createdAt),
           updatedAt: new Date(profile.updatedAt),
         }));
@@ -118,7 +136,7 @@ function App() {
 
     if (savedHours) {
       try {
-        const parsedHours = JSON.parse(savedHours).map((entry: any) => ({
+        const parsedHours = JSON.parse(savedHours).map((entry: HoursEntry & { hourlyRateId?: string }) => ({
           ...entry,
           date: new Date(entry.date),
         }));
@@ -192,7 +210,16 @@ function App() {
     // Calculate results for each profile
     const results: CalculationResult[] = profiles.map(profile => {
       const totalHours = profileHours[profile.id] || 0;
-      const grossAmount = totalHours * profile.hourlyRate;
+      
+      // Calculate gross amount using the actual rates from hours entries
+      let grossAmount = 0;
+      const profileEntries = hoursEntries.filter(entry => entry.profileId === profile.id);
+      profileEntries.forEach(entry => {
+        const hourlyRate = profile.hourlyRates.find(rate => rate.id === entry.hourlyRateId);
+        if (hourlyRate) {
+          grossAmount += entry.hours * hourlyRate.rate;
+        }
+      });
 
       // Calculate deductions (prioritize Uurloon before Marge)
       let totalDeductions = 0;
@@ -271,15 +298,11 @@ function App() {
     return `${hours.toFixed(1)} uur`;
   };
 
-  const generateId = () => {
-    return Math.random().toString(36).substr(2, 9);
-  };
-
   const handleAddProfile = () => {
     setEditingProfile(null);
     setProfileForm({
       name: '',
-      hourlyRate: 0,
+      hourlyRates: [],
       deductionType: 'Uurloon',
       deductions: [],
     });
@@ -287,15 +310,27 @@ function App() {
   };
 
   const handleSaveProfile = () => {
-    if (!profileForm.name.trim() || profileForm.hourlyRate <= 0) {
-      alert('Vul alle verplichte velden in');
+    if (!profileForm.name.trim() || profileForm.hourlyRates.length === 0) {
+      alert('Vul alle verplichte velden in en voeg ten minste één uurtarief toe');
+      return;
+    }
+
+    // Validate that all hourly rates have valid data
+    const hasInvalidRates = profileForm.hourlyRates.some(rate => 
+      !rate.label.trim() || rate.rate <= 0
+    );
+    if (hasInvalidRates) {
+      alert('Alle uurtarieven moeten een naam en een geldig bedrag hebben');
       return;
     }
 
     const newProfile: Profile = {
       id: editingProfile?.id || generateId(),
       name: profileForm.name.trim(),
-      hourlyRate: profileForm.hourlyRate,
+      hourlyRates: profileForm.hourlyRates.map((rate, index) => ({
+        id: editingProfile?.hourlyRates[index]?.id || generateId(),
+        ...rate,
+      })),
       deductionType: profileForm.deductionType,
       deductions: profileForm.deductions.map((d, index) => ({
         id: editingProfile?.deductions[index]?.id || generateId(),
@@ -368,6 +403,32 @@ function App() {
     setProfileToDelete(null);
   };
 
+  const addHourlyRate = () => {
+    setProfileForm({
+      ...profileForm,
+      hourlyRates: [
+        ...profileForm.hourlyRates,
+        {
+          label: '',
+          rate: 0,
+        },
+      ],
+    });
+  };
+
+  const removeHourlyRate = (index: number) => {
+    setProfileForm({
+      ...profileForm,
+      hourlyRates: profileForm.hourlyRates.filter((_, i) => i !== index),
+    });
+  };
+
+  const updateHourlyRate = (index: number, field: string, value: string | number) => {
+    const newRates = [...profileForm.hourlyRates];
+    newRates[index] = { ...newRates[index], [field]: value };
+    setProfileForm({ ...profileForm, hourlyRates: newRates });
+  };
+
   const addDeduction = () => {
     setProfileForm({
       ...profileForm,
@@ -391,7 +452,7 @@ function App() {
     });
   };
 
-  const updateDeduction = (index: number, field: string, value: any) => {
+  const updateDeduction = (index: number, field: string, value: string | number) => {
     const newDeductions = [...profileForm.deductions];
     newDeductions[index] = { ...newDeductions[index], [field]: value };
     setProfileForm({ ...profileForm, deductions: newDeductions });
@@ -403,8 +464,10 @@ function App() {
       alert('Voeg eerst een profiel toe');
       return;
     }
+    const firstProfile = profiles[0];
     setHoursForm({
-      profileId: profiles[0].id,
+      profileId: firstProfile.id,
+      hourlyRateId: firstProfile.hourlyRates.length > 0 ? firstProfile.hourlyRates[0].id : '',
       hours: 0,
       description: '',
     });
@@ -412,14 +475,15 @@ function App() {
   };
 
   const handleSaveHours = () => {
-    if (!hoursForm.profileId || hoursForm.hours <= 0) {
-      alert('Selecteer een profiel en voer geldige uren in');
+    if (!hoursForm.profileId || !hoursForm.hourlyRateId || hoursForm.hours <= 0) {
+      alert('Selecteer een profiel, uurtarief en voer geldige uren in');
       return;
     }
 
     const newHoursEntry: HoursEntry = {
       id: generateId(),
       profileId: hoursForm.profileId,
+      hourlyRateId: hoursForm.hourlyRateId,
       date: new Date(selectedDate),
       hours: hoursForm.hours,
       description: hoursForm.description.trim() || undefined,
@@ -429,6 +493,7 @@ function App() {
     setIsHoursModalOpen(false);
     setHoursForm({
       profileId: '',
+      hourlyRateId: '',
       hours: 0,
       description: '',
     });
@@ -558,10 +623,23 @@ function App() {
       // Create table data with headers and rows
       const tableData = [headers];
       calculations.forEach((calc) => {
+        const profile = profiles.find(p => p.id === calc.profileId);
+        const profileEntries = hoursEntries.filter(entry => entry.profileId === calc.profileId);
+        let totalEarnings = 0;
+        let totalHours = 0;
+        profileEntries.forEach(entry => {
+          const hourlyRate = profile?.hourlyRates.find(rate => rate.id === entry.hourlyRateId);
+          if (hourlyRate) {
+            totalEarnings += entry.hours * hourlyRate.rate;
+            totalHours += entry.hours;
+          }
+        });
+        const averageRate = totalHours > 0 ? totalEarnings / totalHours : 0;
+
         const rowData = [
           calc.profileName,
           formatHours(calc.totalHours),
-          formatCurrency(profiles.find(p => p.id === calc.profileId)?.hourlyRate || 0),
+          formatCurrency(averageRate),
           formatCurrency(calc.grossAmount),
           formatCurrency(calc.totalDeductions),
           formatCurrency(calc.netAmount)
@@ -666,7 +744,7 @@ function App() {
         const data = JSON.parse(e.target?.result as string);
 
         if (data.profiles) {
-          const importedProfiles = data.profiles.map((profile: any) => ({
+          const importedProfiles = data.profiles.map((profile: Profile & { hourlyRate?: number }) => ({
             ...profile,
             createdAt: new Date(profile.createdAt),
             updatedAt: new Date(profile.updatedAt),
@@ -675,7 +753,7 @@ function App() {
         }
 
         if (data.hoursEntries) {
-          const importedHours = data.hoursEntries.map((entry: any) => ({
+          const importedHours = data.hoursEntries.map((entry: HoursEntry & { hourlyRateId?: string }) => ({
             ...entry,
             date: new Date(entry.date),
           }));
@@ -683,7 +761,7 @@ function App() {
         }
 
         alert('Data succesvol geïmporteerd!');
-      } catch (error) {
+      } catch {
         alert('Fout bij importeren van data. Controleer of het bestand geldig is.');
       }
     };
@@ -833,62 +911,6 @@ function App() {
           </div>
         </div>
 
-        {/* Deductions Toggle Section */}
-        {profiles.some(profile => profile.deductions.length > 0) && (
-          <div className="bg-white rounded-2xl shadow-medium border border-slate-200/50 overflow-hidden mb-6">
-            <div className="flex flex-col space-y-1.5 pb-4 p-6">
-              <h3 className="text-xl font-semibold text-slate-900 tracking-tight flex items-center space-x-2">
-                <Calculator className="h-5 w-5 text-primary-600" />
-                <span>Aftrekkingen Toepassen</span>
-              </h3>
-              <p className="text-sm text-slate-500">Selecteer welke aftrekkingen worden toegepast in de berekeningen</p>
-            </div>
-            <div className="p-6">
-              <div className="space-y-4">
-                {profiles.map(profile => (
-                  profile.deductions.length > 0 && (
-                    <div key={profile.id} className="border-b border-slate-200 pb-4 last:border-b-0 last:pb-0">
-                      <h4 className="font-medium text-slate-900 mb-3 flex items-center">
-                        <div className="w-3 h-3 bg-primary-500 rounded-full mr-2"></div>
-                        {profile.name}
-                      </h4>
-                      <div className="space-y-2">
-                        {profile.deductions.map(deduction => {
-                          const deductionKey = `${profile.id}-${deduction.id}`;
-                          const isApplied = appliedDeductions[deductionKey] !== false;
-
-                          return (
-                            <div key={deduction.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                              <div>
-                                <span className="font-medium">{deduction.name}</span>
-                                <span className="text-sm text-slate-500 ml-2">
-                                  ({deduction.amount} {deduction.type === 'percentage' ? '%' : '€'})
-                                </span>
-                                <span className="text-xs text-slate-400 ml-2">
-                                  {deduction.appliesTo === 'employee' ? 'Werknemer' :
-                                    deduction.appliesTo === 'employer' ? 'Werkgever' : 'Beide'}
-                                </span>
-                              </div>
-                              <label className="relative inline-flex items-center cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={isApplied}
-                                  onChange={() => toggleDeduction(profile.id, deduction.id)}
-                                  className="sr-only peer"
-                                />
-                                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
-                              </label>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Daily Hours Overview */}
         {hoursEntries.length > 0 && (
@@ -928,7 +950,7 @@ function App() {
                             {formatHours(totalHours)}
                           </div>
                           <div className="text-xs text-slate-500">
-                            {formatCurrency(totalHours * (profiles.find(p => dayEntries[0]?.profileId === p.id)?.hourlyRate || 0))}
+                            {formatCurrency(totalHours * clientPayment.averageRate)}
                           </div>
                         </div>
                       </div>
@@ -1011,7 +1033,7 @@ function App() {
                       <th className="text-right py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r ">
                         <div className="flex items-center justify-end">
                           <Euro className="h-4 w-4 mr-2 text-green-600" />
-                          Tarief
+                          Gemiddeld Tarief
                         </div>
                       </th>
                       <th className="text-right py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r ">
@@ -1032,13 +1054,31 @@ function App() {
                           Netto
                         </div>
                       </th>
+                      <th className="text-center py-4 px-6 font-semibold text-slate-700 border-b border-slate-200">
+                        <div className="flex items-center justify-center">
+                          <Trash2 className="h-4 w-4 mr-2 text-orange-600" />
+                          Aftrekkingen
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {calculations.map((calc, index) => {
                       const profile = profiles.find(p => p.id === calc.profileId);
-                      const hourlyRate = profile?.hourlyRate || 0;
                       const hasHours = calc.totalHours > 0;
+                      
+                      // Calculate average hourly rate for this profile
+                      const profileEntries = hoursEntries.filter(entry => entry.profileId === calc.profileId);
+                      let totalEarnings = 0;
+                      let totalHours = 0;
+                      profileEntries.forEach(entry => {
+                        const hourlyRate = profile?.hourlyRates.find(rate => rate.id === entry.hourlyRateId);
+                        if (hourlyRate) {
+                          totalEarnings += entry.hours * hourlyRate.rate;
+                          totalHours += entry.hours;
+                        }
+                      });
+                      const averageRate = totalHours > 0 ? totalEarnings / totalHours : 0;
 
                       return (
                         <tr
@@ -1064,7 +1104,7 @@ function App() {
                           </td>
                           <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
                             <div className="text-mono font-medium text-green-700">
-                              {formatCurrency(hourlyRate)}
+                              {formatCurrency(averageRate)}
                             </div>
                           </td>
                           <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
@@ -1080,6 +1120,36 @@ function App() {
                           <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
                             <div className={`text-mono font-bold text-lg ${calc.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                               {formatCurrency(calc.netAmount)}
+                            </div>
+                          </td>
+                          <td className="py-4 px-6 text-center border-b border-slate-200">
+                            <div className="space-y-2">
+                              {profile?.deductions.map(deduction => {
+                                const deductionKey = `${profile.id}-${deduction.id}`;
+                                const isApplied = appliedDeductions[deductionKey] !== false;
+
+                                return (
+                                  <div key={deduction.id} className="flex items-center justify-center space-x-2">
+                                    <span className="text-xs text-slate-600 truncate max-w-20">
+                                      {deduction.name}
+                                    </span>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={isApplied}
+                                        onChange={() => toggleDeduction(profile.id, deduction.id)}
+                                        className="sr-only peer"
+                                      />
+                                      <div className="w-8 h-4 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-primary-600"></div>
+                                    </label>
+                                  </div>
+                                );
+                              })}
+                              {profile?.deductions.length === 0 && (
+                                <div className="text-xs text-slate-400">
+                                  Geen aftrekkingen
+                                </div>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1116,7 +1186,10 @@ function App() {
                     setEditingProfile(profile);
                     setProfileForm({
                       name: profile.name,
-                      hourlyRate: profile.hourlyRate,
+                      hourlyRates: profile.hourlyRates.map(rate => ({
+                        label: rate.label,
+                        rate: rate.rate,
+                      })),
                       deductionType: profile.deductionType,
                       deductions: profile.deductions.map(d => ({
                         name: d.name,
@@ -1137,7 +1210,7 @@ function App() {
                       <span className="font-medium text-slate-900">{profile.name}</span>
                     </div>
                     <div className="text-sm text-slate-500">
-                      {formatCurrency(profile.hourlyRate)}/uur
+                      {profile.hourlyRates.length} tarief{profile.hourlyRates.length !== 1 ? 'en' : ''}
                     </div>
                   </div>
                   <div className="mt-2 text-xs text-slate-500">
@@ -1204,7 +1277,7 @@ function App() {
                   <div className="p-4 bg-slate-50 rounded-xl">
                     <h3 className="font-medium text-slate-900">{profileToDelete.name}</h3>
                     <div className="text-sm text-slate-500 mt-1">
-                      {formatCurrency(profileToDelete.hourlyRate)}/uur • {profileToDelete.deductions.length} aftrekkingen
+                      {profileToDelete.hourlyRates.length} tarief{profileToDelete.hourlyRates.length !== 1 ? 'en' : ''} • {profileToDelete.deductions.length} aftrekkingen
                     </div>
                     <div className="text-xs text-slate-400 mt-2">
                       Aangemaakt: {new Date(profileToDelete.createdAt).toLocaleDateString('nl-NL')}
@@ -1284,59 +1357,55 @@ function App() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-2">
-                        Uurtarief (€) *
-                      </label>
-                      <div className="relative">
-                        <select
-                          className="block w-full rounded-xl border-0 bg-white px-4 py-3 text-slate-900 shadow-soft ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200 appearance-none"
-                          value={profileForm.hourlyRate}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            if (value === 'custom') {
-                              setProfileForm({
-                                ...profileForm,
-                                hourlyRate: 0
-                              });
-                            } else {
-                              setProfileForm({
-                                ...profileForm,
-                                hourlyRate: parseFloat(value) || 0
-                              });
-                            }
-                          }}
+                      <div className="flex items-center justify-between mb-4">
+                        <label className="block text-sm font-medium text-slate-700">
+                          Uurtarieven *
+                        </label>
+                        <button
+                          type="button"
+                          className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-primary-600 text-white shadow-soft hover:bg-primary-700 hover:shadow-medium focus:ring-primary-500 active:scale-95"
+                          onClick={addHourlyRate}
                         >
-                          <option value="10">€10,00</option>
-                          <option value="20">€20,00</option>
-                          <option value="30">€30,00</option>
-                          <option value="40">€40,00</option>
-                          <option value="custom">Aangepast bedrag...</option>
-                        </select>
-                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
-                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path>
-                          </svg>
-                        </div>
+                          <Plus className="h-4 w-4 mr-1" />
+                          Tarief Toevoegen
+                        </button>
                       </div>
 
-                      {/* Show custom input when a predefined option is not selected */}
-                      {![10, 20, 30, 40].includes(profileForm.hourlyRate) && (
-                        <div className="mt-2">
+                      {profileForm.hourlyRates.map((rate, index) => (
+                        <div key={index} className="flex items-center space-x-3 mb-3 p-3 bg-slate-50 rounded-xl">
+                          <input
+                            type="text"
+                            placeholder="Naam tarief (bijv. Standaard, Overtime)"
+                            className="flex-1 rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
+                            value={rate.label}
+                            onChange={(e) => updateHourlyRate(index, 'label', e.target.value)}
+                          />
                           <input
                             type="number"
                             step="0.01"
                             min="0"
-                            className="block w-full rounded-xl border-0 bg-white px-4 py-3 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
-                            placeholder="0.00"
-                            value={profileForm.hourlyRate || ''}
+                            placeholder="€0.00"
+                            className="w-24 rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
+                            value={rate.rate || ''}
                             onChange={(e) => {
                               const value = e.target.value;
-                              setProfileForm({
-                                ...profileForm,
-                                hourlyRate: value === '' ? 0 : parseFloat(value) || 0
-                              });
+                              updateHourlyRate(index, 'rate', value === '' ? 0 : parseFloat(value) || 0);
                             }}
                           />
+                          <button
+                            type="button"
+                            className="p-2 text-slate-400 hover:text-danger-600 transition-colors"
+                            onClick={() => removeHourlyRate(index)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))}
+
+                      {profileForm.hourlyRates.length === 0 && (
+                        <div className="text-center py-8 text-slate-500">
+                          <Euro className="h-12 w-12 mx-auto mb-3 text-slate-300" />
+                          <p className="text-sm">Voeg uurtarieven toe om te beginnen</p>
                         </div>
                       )}
                     </div>
@@ -1533,16 +1602,44 @@ function App() {
                     <select
                       className="block w-full rounded-xl border-0 bg-white px-4 py-3 text-slate-900 shadow-soft ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
                       value={hoursForm.profileId}
-                      onChange={(e) => setHoursForm({ ...hoursForm, profileId: e.target.value })}
+                      onChange={(e) => {
+                        const selectedProfile = profiles.find(p => p.id === e.target.value);
+                        setHoursForm({ 
+                          ...hoursForm, 
+                          profileId: e.target.value,
+                          hourlyRateId: selectedProfile?.hourlyRates && selectedProfile.hourlyRates.length > 0 ? selectedProfile.hourlyRates[0].id : ''
+                        });
+                      }}
                     >
                       <option value="">Selecteer een profiel</option>
                       {profiles.map(profile => (
                         <option key={profile.id} value={profile.id}>
-                          {profile.name} - {formatCurrency(profile.hourlyRate)}/uur
+                          {profile.name} ({profile.hourlyRates.length} tarief{profile.hourlyRates.length !== 1 ? 'en' : ''})
                         </option>
                       ))}
                     </select>
                   </div>
+
+                  {/* Hourly Rate Selection */}
+                  {hoursForm.profileId && (
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">
+                        Uurtarief *
+                      </label>
+                      <select
+                        className="block w-full rounded-xl border-0 bg-white px-4 py-3 text-slate-900 shadow-soft ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
+                        value={hoursForm.hourlyRateId}
+                        onChange={(e) => setHoursForm({ ...hoursForm, hourlyRateId: e.target.value })}
+                      >
+                        <option value="">Selecteer een uurtarief</option>
+                        {profiles.find(p => p.id === hoursForm.profileId)?.hourlyRates.map(rate => (
+                          <option key={rate.id} value={rate.id}>
+                            {rate.label} - {formatCurrency(rate.rate)}/uur
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   {/* Hours Input */}
                   <div>
@@ -1583,15 +1680,16 @@ function App() {
                   </div>
 
                   {/* Preview */}
-                  {hoursForm.profileId && hoursForm.hours > 0 && (
+                  {hoursForm.profileId && hoursForm.hourlyRateId && hoursForm.hours > 0 && (
                     <div className="p-4 bg-slate-50 rounded-xl">
                       <h4 className="font-medium text-slate-900 mb-2">Preview</h4>
                       <div className="text-sm text-slate-600">
                         <div>Profiel: {profiles.find(p => p.id === hoursForm.profileId)?.name}</div>
+                        <div>Tarief: {profiles.find(p => p.id === hoursForm.profileId)?.hourlyRates.find(r => r.id === hoursForm.hourlyRateId)?.label}</div>
                         <div>Datum: {new Date(selectedDate).toLocaleDateString('nl-NL')}</div>
                         <div>Uren: {formatHours(hoursForm.hours)}</div>
                         <div className="font-semibold text-slate-900">
-                          Totaal: {formatCurrency(hoursForm.hours * (profiles.find(p => p.id === hoursForm.profileId)?.hourlyRate || 0))}
+                          Totaal: {formatCurrency(hoursForm.hours * (profiles.find(p => p.id === hoursForm.profileId)?.hourlyRates.find(r => r.id === hoursForm.hourlyRateId)?.rate || 0))}
                         </div>
                       </div>
                     </div>
