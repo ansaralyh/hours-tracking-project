@@ -27,6 +27,7 @@ interface Deduction {
   type: 'percentage' | 'fixed';
   priority: number;
   appliesTo: 'employee' | 'employer' | 'both';
+  recipientProfileId?: string; // New: specifies who receives the deduction amount
 }
 
 interface HoursEntry {
@@ -46,6 +47,7 @@ interface CalculationResult {
   totalDeductions: number;
   netAmount: number;
   deductionBreakdown: DeductionBreakdown[];
+  receivedFromOthers: number; // New: amount received from other profiles
 }
 
 interface DeductionBreakdown {
@@ -53,6 +55,7 @@ interface DeductionBreakdown {
   deductionName: string;
   amount: number;
   type: 'percentage' | 'fixed';
+  recipient?: string; // New: who receives this deduction
 }
 
 interface ClientPayment {
@@ -197,87 +200,213 @@ function App() {
     calculateTotals();
   }, [profiles, hoursEntries, appliedDeductions]);
 
-  const calculateTotals = () => {
-    // Group hours by profile
-    const profileHours = hoursEntries.reduce((acc, entry) => {
-      if (!acc[entry.profileId]) {
-        acc[entry.profileId] = 0;
+
+
+
+
+
+
+
+
+
+
+
+const calculateTotals = () => {
+  // Group hours by profile
+  const profileHours = hoursEntries.reduce((acc, entry) => {
+    if (!acc[entry.profileId]) {
+      acc[entry.profileId] = 0;
+    }
+    acc[entry.profileId] += entry.hours;
+    return acc;
+  }, {} as Record<string, number>);
+
+  // Calculate results for each profile - PHASE 1: Calculate gross and own deductions
+  const phase1Results = profiles.map(profile => {
+    const totalHours = profileHours[profile.id] || 0;
+    
+    // Calculate gross amount
+    let grossAmount = 0;
+    const profileEntries = hoursEntries.filter(entry => entry.profileId === profile.id);
+    profileEntries.forEach(entry => {
+      const hourlyRate = profile.hourlyRates.find(rate => rate.id === entry.hourlyRateId);
+      if (hourlyRate) {
+        grossAmount += entry.hours * hourlyRate.rate;
       }
-      acc[entry.profileId] += entry.hours;
-      return acc;
-    }, {} as Record<string, number>);
+    });
 
-    // Calculate results for each profile
-    const results: CalculationResult[] = profiles.map(profile => {
-      const totalHours = profileHours[profile.id] || 0;
-      
-      // Calculate gross amount using the actual rates from hours entries
-      let grossAmount = 0;
-      const profileEntries = hoursEntries.filter(entry => entry.profileId === profile.id);
-      profileEntries.forEach(entry => {
-        const hourlyRate = profile.hourlyRates.find(rate => rate.id === entry.hourlyRateId);
-        if (hourlyRate) {
-          grossAmount += entry.hours * hourlyRate.rate;
+    // ==================== START OF DEBUG CODE ====================
+    // Calculate deductions SEQUENTIALLY
+    let remainingAmount = grossAmount;
+    
+    console.log(`=== Calculating deductions for ${profile.name} ===`);
+    console.log(`Gross: €${grossAmount}, Total Hours: ${totalHours}`);
+
+    const deductionBreakdown = profile.deductions
+      .sort((a, b) => a.priority - b.priority)
+      .map(deduction => {
+        const deductionKey = `${profile.id}-${deduction.id}`;
+        const isApplied = appliedDeductions[deductionKey] !== false;
+
+        console.log(`Processing deduction: ${deduction.name}, Applied: ${isApplied}`);
+        console.log(`Remaining before: €${remainingAmount}`);
+
+        let amount = 0;
+        if (isApplied) {
+          if (deduction.type === 'percentage') {
+            // SPECIAL HANDLING FOR PROFIT SHARE DEDUCTIONS
+            if (deduction.name.includes('Profit Share')) {
+              // Calculate profit amount (after salary and management fee)
+              let tempAmount = grossAmount;
+              
+              // Apply salary deduction (fixed)
+              const salaryDeduction = profile.deductions.find(d => 
+                appliedDeductions[`${profile.id}-${d.id}`] !== false && d.name.includes('Salary')
+              );
+              if (salaryDeduction && salaryDeduction.type === 'fixed') {
+                tempAmount -= salaryDeduction.amount * totalHours;
+                console.log(`After salary (${salaryDeduction.amount} × ${totalHours}): €${tempAmount}`);
+              }
+              
+              // Apply management fee deduction (percentage)
+              const mgmtFeeDeduction = profile.deductions.find(d => 
+                appliedDeductions[`${profile.id}-${d.id}`] !== false && d.name.includes('MGMT Fee')
+              );
+              if (mgmtFeeDeduction && mgmtFeeDeduction.type === 'percentage') {
+                const mgmtAmount = (tempAmount * mgmtFeeDeduction.amount) / 100;
+                tempAmount -= mgmtAmount;
+                console.log(`After MGMT fee (${mgmtFeeDeduction.amount}%): €${tempAmount}`);
+              }
+              
+              // Calculate profit share based on the profit amount
+              amount = (tempAmount * deduction.amount) / 100;
+              console.log(`Profit share (${deduction.amount}% of €${tempAmount}): €${amount}`);
+            } else {
+              // For regular percentage deductions
+              amount = (remainingAmount * deduction.amount) / 100;
+              console.log(`Regular percentage (${deduction.amount}% of €${remainingAmount}): €${amount}`);
+            }
+          } else {
+            // Fixed amount is PER HOUR, so multiply by hours
+            amount = deduction.amount * totalHours;
+            console.log(`Fixed amount (${deduction.amount} × ${totalHours}): €${amount}`);
+          }
+          remainingAmount -= amount;
         }
+        
+        console.log(`Remaining after: €${remainingAmount}`);
+        console.log('---');
+        
+        return {
+          deductionId: deduction.id,
+          deductionName: deduction.name,
+          amount,
+          type: deduction.type,
+          recipient: deduction.recipientProfileId || ''
+        };
       });
+    // ==================== END OF DEBUG CODE ====================
 
-      // Calculate deductions (prioritize Uurloon before Marge)
-      let totalDeductions = 0;
-      const deductionBreakdown = profile.deductions
-        .sort((a, b) => a.priority - b.priority)
-        .map(deduction => {
-          const deductionKey = `${profile.id}-${deduction.id}`;
-          const isApplied = appliedDeductions[deductionKey] !== false;
+    const totalDeductions = grossAmount - remainingAmount;
 
-          const amount = isApplied
-            ? (deduction.type === 'percentage'
-              ? (grossAmount * deduction.amount) / 100
-              : deduction.amount)
-            : 0;
-
-          totalDeductions += amount;
-          return {
-            deductionId: deduction.id,
-            deductionName: deduction.name,
-            amount,
-            type: deduction.type,
-          };
-        });
-
-      return {
-        profileId: profile.id,
-        profileName: profile.name,
-        totalHours,
-        grossAmount,
-        totalDeductions,
-        netAmount: grossAmount - totalDeductions,
-        deductionBreakdown,
-      };
-    });
-
-    setCalculations(results);
-
-    // Calculate client payment
-    const totalAmount = results.reduce((sum, result) => sum + result.grossAmount, 0);
-    const totalHours = results.reduce((sum, result) => sum + result.totalHours, 0);
-    const averageRate = totalHours > 0 ? totalAmount / totalHours : 0;
-
-    setClientPayment({
-      totalAmount,
+    return {
+      profileId: profile.id,
+      profileName: profile.name,
       totalHours,
-      averageRate,
+      grossAmount,
+      totalDeductions,
+      netAmount: remainingAmount,
+      deductionBreakdown,
+      receivedFromOthers: 0
+    };
+  });
+
+  // PHASE 2: Calculate transfers between profiles
+  const phase2Results = phase1Results.map(result => {
+    let receivedFromOthers = 0;
+    
+    // Check all other profiles for deductions that transfer to this profile
+    phase1Results.forEach(otherResult => {
+      if (otherResult.profileId !== result.profileId) {
+        const otherProfile = profiles.find(p => p.id === otherResult.profileId);
+        if (otherProfile) {
+          otherProfile.deductions.forEach(deduction => {
+            if (deduction.recipientProfileId === result.profileId) {
+              const deductionKey = `${otherProfile.id}-${deduction.id}`;
+              const isApplied = appliedDeductions[deductionKey] !== false;
+              
+              if (isApplied) {
+                // Find this specific deduction in the breakdown
+                const deductionDetail = otherResult.deductionBreakdown.find(
+                  d => d.deductionId === deduction.id
+                );
+                
+                if (deductionDetail) {
+                  receivedFromOthers += deductionDetail.amount;
+                }
+              }
+            }
+          });
+        }
+      }
     });
+    
+    return {
+      ...result,
+      receivedFromOthers,
+      netAmount: result.netAmount + receivedFromOthers
+    };
+  });
 
-    // Calculate payment distribution
-    const distribution: PaymentDistribution[] = results.map(result => ({
-      profileId: result.profileId,
-      profileName: result.profileName,
-      amount: result.netAmount,
-      percentage: totalAmount > 0 ? (result.netAmount / totalAmount) * 100 : 0,
-    }));
+  setCalculations(phase2Results);
 
-    setPaymentDistribution(distribution);
-  };
+  // Calculate client payment
+  const totalAmount = phase2Results.reduce((sum, result) => sum + result.grossAmount, 0);
+  const totalHours = phase2Results.reduce((sum, result) => sum + result.totalHours, 0);
+  const averageRate = totalHours > 0 ? totalAmount / totalHours : 0;
+
+  setClientPayment({
+    totalAmount,
+    totalHours,
+    averageRate,
+  });
+
+  // Calculate payment distribution
+  const totalNetAmount = phase2Results.reduce((sum, result) => sum + result.netAmount, 0);
+  const distribution: PaymentDistribution[] = phase2Results.map(result => ({
+    profileId: result.profileId,
+    profileName: result.profileName,
+    amount: result.netAmount,
+    percentage: totalNetAmount > 0 ? (result.netAmount / totalNetAmount) * 100 : 0,
+  }));
+
+  setPaymentDistribution(distribution);
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   const toggleDeduction = (profileId: string, deductionId: string) => {
     const deductionKey = `${profileId}-${deductionId}`;
@@ -316,7 +445,7 @@ function App() {
     }
 
     // Validate that all hourly rates have valid data
-    const hasInvalidRates = profileForm.hourlyRates.some(rate => 
+    const hasInvalidRates = profileForm.hourlyRates.some(rate =>
       !rate.label.trim() || rate.rate <= 0
     );
     if (hasInvalidRates) {
@@ -351,22 +480,6 @@ function App() {
     setIsProfileModalOpen(false);
     setEditingProfile(null);
   };
-  // const handleEditProfile = (profile: Profile) => {
-  //   setEditingProfile(profile);
-  //   setProfileForm({
-  //     name: profile.name,
-  //     hourlyRate: profile.hourlyRate,
-  //     deductionType: profile.deductionType,
-  //     deductions: profile.deductions.map(d => ({
-  //       name: d.name,
-  //       amount: d.amount,
-  //       type: d.type,
-  //       priority: d.priority,
-  //       appliesTo: d.appliesTo,
-  //     })),
-  //   });
-  //   setIsProfileModalOpen(true);
-  // };
 
   // Add this delete function
   const handleDeleteProfile = (profile: Profile) => {
@@ -616,8 +729,8 @@ function App() {
       yPosition += 15;
 
       // Prepare table data
-      const headers = ['Naam', 'Uren', 'Tarief', 'Bruto', 'Aftrek', 'Netto'];
-      const colWidths = [40, 25, 30, 30, 30, 30];
+      const headers = ['Naam', 'Uren', 'Tarief', 'Bruto', 'Aftrek', 'Ontvangen', 'Netto'];
+      const colWidths = [30, 20, 25, 25, 25, 25, 30];
       const rowHeight = 15;
 
       // Create table data with headers and rows
@@ -642,6 +755,7 @@ function App() {
           formatCurrency(averageRate),
           formatCurrency(calc.grossAmount),
           formatCurrency(calc.totalDeductions),
+          formatCurrency(calc.receivedFromOthers),
           formatCurrency(calc.netAmount)
         ];
         tableData.push(rowData);
@@ -651,7 +765,7 @@ function App() {
       const rowHeights = Array(tableData.length).fill(rowHeight);
 
       // Draw table with proper cells
-      doc.setFontSize(10);
+      doc.setFontSize(8);
       drawTable(20, yPosition, colWidths, rowHeights, tableData, true);
       yPosition += (rowHeights.reduce((sum, height) => sum + height, 0)) + 20;
     }
@@ -990,9 +1104,10 @@ function App() {
                 <h4 className="font-medium text-blue-900 mb-2">📊 Hoe worden de berekeningen gemaakt?</h4>
                 <div className="text-sm text-blue-800 space-y-1">
                   <div><strong>Bruto = Uren × Uurtarief</strong> (bijv. 2 uur × €10,00 = €20,00)</div>
-                  <div><strong>Netto = Bruto - Aftrekkingen</strong> (bijv. €20,00 - €2,00 = €18,00)</div>
+                  <div><strong>Netto = Bruto - Aftrekkingen + Ontvangen van anderen</strong></div>
+                  <div><strong>Aftrekkingen kunnen worden doorgestort naar andere profielen</strong></div>
                   <div className="text-xs text-blue-600 mt-2">
-                    💡 Tip: Voeg uren toe met de groene "Uren Toevoegen" knop om positieve bedragen te zien
+                    💡 Tip: Stel complexe verdelingen in via het profielbeheer
                   </div>
                 </div>
               </div>
@@ -1050,6 +1165,12 @@ function App() {
                       </th>
                       <th className="text-right py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r ">
                         <div className="flex items-center justify-end">
+                          <Download className="h-4 w-4 mr-2 text-green-600" />
+                          Ontvangen
+                        </div>
+                      </th>
+                      <th className="text-right py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r ">
+                        <div className="flex items-center justify-end">
                           <Calculator className="h-4 w-4 mr-2 text-green-600" />
                           Netto
                         </div>
@@ -1066,7 +1187,7 @@ function App() {
                     {calculations.map((calc, index) => {
                       const profile = profiles.find(p => p.id === calc.profileId);
                       const hasHours = calc.totalHours > 0;
-                      
+
                       // Calculate average hourly rate for this profile
                       const profileEntries = hoursEntries.filter(entry => entry.profileId === calc.profileId);
                       let totalEarnings = 0;
@@ -1118,6 +1239,11 @@ function App() {
                             </div>
                           </td>
                           <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
+                            <div className="text-mono font-semibold text-green-600">
+                              +{formatCurrency(calc.receivedFromOthers)}
+                            </div>
+                          </td>
+                          <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
                             <div className={`text-mono font-bold text-lg ${calc.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                               {formatCurrency(calc.netAmount)}
                             </div>
@@ -1130,8 +1256,13 @@ function App() {
 
                                 return (
                                   <div key={deduction.id} className="flex items-center justify-center space-x-2">
-                                    <span className="text-xs text-slate-600 truncate max-w-20">
+                                    <span className="text-xs text-slate-600 truncate max-w-20" title={deduction.name}>
                                       {deduction.name}
+                                      {deduction.recipientProfileId && (
+                                        <span className="text-xs text-slate-400 block">
+                                          → {profiles.find(p => p.id === deduction.recipientProfileId)?.name || 'Onbekend'}
+                                        </span>
+                                      )}
                                     </span>
                                     <label className="relative inline-flex items-center cursor-pointer">
                                       <input
@@ -1197,6 +1328,7 @@ function App() {
                         type: d.type,
                         priority: d.priority,
                         appliesTo: d.appliesTo,
+                        recipientProfileId: d.recipientProfileId,
                       })),
                     });
                     setShowProfilesToast(false);
@@ -1206,7 +1338,7 @@ function App() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-3">
                       <div className="w-3 h-3 bg-primary-500 rounded-full"></div>
-                      
+
                       <span className="font-medium text-slate-900">{profile.name}</span>
                     </div>
                     <div className="text-sm text-slate-500">
@@ -1534,6 +1666,25 @@ function App() {
                             Beide
                           </label>
                         </div>
+
+                        {/* Recipient selection for deductions that go to other profiles */}
+                        <div className="flex items-center space-x-3 pl-2">
+                          <span className="text-sm text-slate-600">Gaat naar:</span>
+                          <select
+                            className="rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
+                            value={deduction.recipientProfileId || ''}
+                            onChange={(e) => updateDeduction(index, 'recipientProfileId', e.target.value)}
+                          >
+                            <option value="">-- Houdt zelf --</option>
+                            {profiles
+                              .filter(p => p.id !== (editingProfile?.id || ''))
+                              .map(profile => (
+                                <option key={profile.id} value={profile.id}>
+                                  {profile.name}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1604,8 +1755,8 @@ function App() {
                       value={hoursForm.profileId}
                       onChange={(e) => {
                         const selectedProfile = profiles.find(p => p.id === e.target.value);
-                        setHoursForm({ 
-                          ...hoursForm, 
+                        setHoursForm({
+                          ...hoursForm,
                           profileId: e.target.value,
                           hourlyRateId: selectedProfile?.hourlyRates && selectedProfile.hourlyRates.length > 0 ? selectedProfile.hourlyRates[0].id : ''
                         });
