@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Calculator, Users, Euro, FileText, Download, Upload, Plus, Trash2, X, Clock, Calendar, AlertCircle } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { FaQuestionCircle } from 'react-icons/fa';
@@ -10,10 +10,26 @@ interface HourlyRate {
   rate: number;
 }
 
+interface ClientRate {
+  id: string;
+  label: string;
+  rate: number;
+  employeeRateId: string; // Links to the corresponding employee rate
+}
+
+interface ProfitDistribution {
+  id: string;
+  name: string;
+  percentage: number;
+  type: 'margin' | 'profit_share';
+}
+
 interface Profile {
   id: string;
   name: string;
   hourlyRates: HourlyRate[];
+  clientRates: ClientRate[];
+  profitDistributions: ProfitDistribution[];
   deductionType: 'Uurloon' | 'Marge';
   deductions: Deduction[];
   createdAt: Date;
@@ -27,7 +43,6 @@ interface Deduction {
   type: 'percentage' | 'fixed';
   priority: number;
   appliesTo: 'employee' | 'employer' | 'both';
-  recipientProfileId?: string; // New: specifies who receives the deduction amount
 }
 
 interface HoursEntry {
@@ -39,6 +54,17 @@ interface HoursEntry {
   description?: string;
 }
 
+interface RevenueBreakdown {
+  clientPayment: number;
+  employeePayment: number;
+  profitMargin: number;
+  profitDistribution: Array<{
+    name: string;
+    amount: number;
+    percentage: number;
+  }>;
+}
+
 interface CalculationResult {
   profileId: string;
   profileName: string;
@@ -47,7 +73,7 @@ interface CalculationResult {
   totalDeductions: number;
   netAmount: number;
   deductionBreakdown: DeductionBreakdown[];
-  receivedFromOthers: number; // New: amount received from other profiles
+  revenueBreakdown: RevenueBreakdown;
 }
 
 interface DeductionBreakdown {
@@ -55,7 +81,6 @@ interface DeductionBreakdown {
   deductionName: string;
   amount: number;
   type: 'percentage' | 'fixed';
-  recipient?: string; // New: who receives this deduction
 }
 
 interface ClientPayment {
@@ -100,6 +125,8 @@ function App() {
   const [profileForm, setProfileForm] = useState({
     name: '',
     hourlyRates: [] as Omit<HourlyRate, 'id'>[],
+    clientRates: [] as Omit<ClientRate, 'id'>[],
+    profitDistributions: [] as Omit<ProfitDistribution, 'id'>[],
     deductionType: 'Uurloon' as 'Uurloon' | 'Marge',
     deductions: [] as Omit<Deduction, 'id'>[],
   });
@@ -128,6 +155,9 @@ function App() {
             label: 'Standard Rate',
             rate: profile.hourlyRate
           }] : []),
+          // Initialize new fields if they don't exist
+          clientRates: profile.clientRates || [],
+          profitDistributions: profile.profitDistributions || [],
           createdAt: new Date(profile.createdAt),
           updatedAt: new Date(profile.updatedAt),
         }));
@@ -193,220 +223,155 @@ function App() {
 
       setAppliedDeductions(newAppliedDeductions);
     }
-  }, [profiles]);
+  }, [profiles, appliedDeductions]);
+
+  const calculateRevenueBreakdown = (profile: Profile, profileEntries: HoursEntry[], employeePayment: number): RevenueBreakdown => {
+    // Calculate client payment based on client rates
+    let clientPayment = 0;
+    profileEntries.forEach(entry => {
+      // Find the corresponding hourly rate for this entry
+      const hourlyRate = profile.hourlyRates.find(rate => rate.id === entry.hourlyRateId);
+      if (hourlyRate) {
+        // Find client rate that corresponds to this hourly rate
+        const clientRate = profile.clientRates.find(rate => {
+          // For now, we'll match by index since we're using form indices
+          const hourlyRateIndex = profile.hourlyRates.findIndex(hr => hr.id === hourlyRate.id);
+          return rate.employeeRateId === hourlyRateIndex.toString();
+        });
+        
+        if (clientRate) {
+          clientPayment += entry.hours * clientRate.rate;
+        } else {
+          // If no client rate found, use employee rate * 2 as default client rate
+          clientPayment += entry.hours * hourlyRate.rate * 2;
+        }
+      }
+    });
+
+    // If no client rates are set, use employee payment * 2 as client payment
+    if (clientPayment === 0) {
+      clientPayment = employeePayment * 2;
+    }
+
+    // Calculate profit margin (difference between client payment and employee payment)
+    const profitMargin = clientPayment - employeePayment;
+
+    // Calculate profit distribution
+    const profitDistributions = profile.profitDistributions.map(dist => {
+      let amount = 0;
+      if (dist.type === 'margin') {
+        // Margin is calculated as percentage of employee payment
+        amount = (employeePayment * dist.percentage) / 100;
+      } else if (dist.type === 'profit_share') {
+        // Profit share is calculated as percentage of profit margin
+        amount = (profitMargin * dist.percentage) / 100;
+      }
+      
+      return {
+        name: dist.name,
+        amount,
+        percentage: dist.percentage,
+      };
+    });
+
+    return {
+      clientPayment,
+      employeePayment,
+      profitMargin,
+      profitDistribution: profitDistributions,
+    };
+  };
+
+  const calculateTotals = useCallback(() => {
+    // Group hours by profile
+    const profileHours = hoursEntries.reduce((acc, entry) => {
+      if (!acc[entry.profileId]) {
+        acc[entry.profileId] = 0;
+      }
+      acc[entry.profileId] += entry.hours;
+      return acc;
+    }, {} as Record<string, number>);
+
+    // Calculate results for each profile
+    const results: CalculationResult[] = profiles.map(profile => {
+      const totalHours = profileHours[profile.id] || 0;
+      
+      // Calculate gross amount using the actual rates from hours entries
+      let grossAmount = 0;
+      const profileEntries = hoursEntries.filter(entry => entry.profileId === profile.id);
+      profileEntries.forEach(entry => {
+        const hourlyRate = profile.hourlyRates.find(rate => rate.id === entry.hourlyRateId);
+        if (hourlyRate) {
+          grossAmount += entry.hours * hourlyRate.rate;
+        }
+      });
+
+      // Calculate deductions (prioritize Uurloon before Marge)
+      let totalDeductions = 0;
+      const deductionBreakdown = profile.deductions
+        .sort((a, b) => a.priority - b.priority)
+        .map(deduction => {
+          const deductionKey = `${profile.id}-${deduction.id}`;
+          const isApplied = appliedDeductions[deductionKey] !== false;
+
+          const amount = isApplied
+            ? (deduction.type === 'percentage'
+              ? (grossAmount * deduction.amount) / 100
+              : deduction.amount)
+            : 0;
+
+          totalDeductions += amount;
+          return {
+            deductionId: deduction.id,
+            deductionName: deduction.name,
+            amount,
+            type: deduction.type,
+          };
+        });
+
+      // Calculate revenue breakdown
+      const revenueBreakdown = calculateRevenueBreakdown(profile, profileEntries, grossAmount);
+
+      return {
+        profileId: profile.id,
+        profileName: profile.name,
+        totalHours,
+        grossAmount,
+        totalDeductions,
+        netAmount: grossAmount - totalDeductions,
+        deductionBreakdown,
+        revenueBreakdown,
+      };
+    });
+
+    setCalculations(results);
+
+    // Calculate client payment using revenue breakdown
+    const totalClientPayment = results.reduce((sum, result) => sum + result.revenueBreakdown.clientPayment, 0);
+    const totalHours = results.reduce((sum, result) => sum + result.totalHours, 0);
+    const averageRate = totalHours > 0 ? totalClientPayment / totalHours : 0;
+
+    setClientPayment({
+      totalAmount: totalClientPayment,
+      totalHours,
+      averageRate,
+    });
+
+    // Calculate payment distribution
+    const distribution: PaymentDistribution[] = results.map(result => ({
+      profileId: result.profileId,
+      profileName: result.profileName,
+      amount: result.netAmount,
+      percentage: totalClientPayment > 0 ? (result.netAmount / totalClientPayment) * 100 : 0,
+    }));
+
+    setPaymentDistribution(distribution);
+  }, [profiles, hoursEntries, appliedDeductions]);
 
   // Calculate totals whenever data changes
   useEffect(() => {
     calculateTotals();
-  }, [profiles, hoursEntries, appliedDeductions]);
-
-
-
-
-
-
-
-
-
-
-
-
-const calculateTotals = () => {
-  // Group hours by profile
-  const profileHours = hoursEntries.reduce((acc, entry) => {
-    if (!acc[entry.profileId]) {
-      acc[entry.profileId] = 0;
-    }
-    acc[entry.profileId] += entry.hours;
-    return acc;
-  }, {} as Record<string, number>);
-
-  // Calculate results for each profile - PHASE 1: Calculate gross and own deductions
-  const phase1Results = profiles.map(profile => {
-    const totalHours = profileHours[profile.id] || 0;
-    
-    // Calculate gross amount
-    let grossAmount = 0;
-    const profileEntries = hoursEntries.filter(entry => entry.profileId === profile.id);
-    profileEntries.forEach(entry => {
-      const hourlyRate = profile.hourlyRates.find(rate => rate.id === entry.hourlyRateId);
-      if (hourlyRate) {
-        grossAmount += entry.hours * hourlyRate.rate;
-      }
-    });
-
-    // ==================== START OF DEBUG CODE ====================
-    // Calculate deductions SEQUENTIALLY
-    let remainingAmount = grossAmount;
-    
-    console.log(`=== Calculating deductions for ${profile.name} ===`);
-    console.log(`Gross: €${grossAmount}, Total Hours: ${totalHours}`);
-
-    const deductionBreakdown = profile.deductions
-      .sort((a, b) => a.priority - b.priority)
-      .map(deduction => {
-        const deductionKey = `${profile.id}-${deduction.id}`;
-        const isApplied = appliedDeductions[deductionKey] !== false;
-
-        console.log(`Processing deduction: ${deduction.name}, Applied: ${isApplied}`);
-        console.log(`Remaining before: €${remainingAmount}`);
-
-        let amount = 0;
-        if (isApplied) {
-          if (deduction.type === 'percentage') {
-            // SPECIAL HANDLING FOR PROFIT SHARE DEDUCTIONS
-            if (deduction.name.includes('Profit Share')) {
-              // Calculate profit amount (after salary and management fee)
-              let tempAmount = grossAmount;
-              
-              // Apply salary deduction (fixed)
-              const salaryDeduction = profile.deductions.find(d => 
-                appliedDeductions[`${profile.id}-${d.id}`] !== false && d.name.includes('Salary')
-              );
-              if (salaryDeduction && salaryDeduction.type === 'fixed') {
-                tempAmount -= salaryDeduction.amount * totalHours;
-                console.log(`After salary (${salaryDeduction.amount} × ${totalHours}): €${tempAmount}`);
-              }
-              
-              // Apply management fee deduction (percentage)
-              const mgmtFeeDeduction = profile.deductions.find(d => 
-                appliedDeductions[`${profile.id}-${d.id}`] !== false && d.name.includes('MGMT Fee')
-              );
-              if (mgmtFeeDeduction && mgmtFeeDeduction.type === 'percentage') {
-                const mgmtAmount = (tempAmount * mgmtFeeDeduction.amount) / 100;
-                tempAmount -= mgmtAmount;
-                console.log(`After MGMT fee (${mgmtFeeDeduction.amount}%): €${tempAmount}`);
-              }
-              
-              // Calculate profit share based on the profit amount
-              amount = (tempAmount * deduction.amount) / 100;
-              console.log(`Profit share (${deduction.amount}% of €${tempAmount}): €${amount}`);
-            } else {
-              // For regular percentage deductions
-              amount = (remainingAmount * deduction.amount) / 100;
-              console.log(`Regular percentage (${deduction.amount}% of €${remainingAmount}): €${amount}`);
-            }
-          } else {
-            // Fixed amount is PER HOUR, so multiply by hours
-            amount = deduction.amount * totalHours;
-            console.log(`Fixed amount (${deduction.amount} × ${totalHours}): €${amount}`);
-          }
-          remainingAmount -= amount;
-        }
-        
-        console.log(`Remaining after: €${remainingAmount}`);
-        console.log('---');
-        
-        return {
-          deductionId: deduction.id,
-          deductionName: deduction.name,
-          amount,
-          type: deduction.type,
-          recipient: deduction.recipientProfileId || ''
-        };
-      });
-    // ==================== END OF DEBUG CODE ====================
-
-    const totalDeductions = grossAmount - remainingAmount;
-
-    return {
-      profileId: profile.id,
-      profileName: profile.name,
-      totalHours,
-      grossAmount,
-      totalDeductions,
-      netAmount: remainingAmount,
-      deductionBreakdown,
-      receivedFromOthers: 0
-    };
-  });
-
-  // PHASE 2: Calculate transfers between profiles
-  const phase2Results = phase1Results.map(result => {
-    let receivedFromOthers = 0;
-    
-    // Check all other profiles for deductions that transfer to this profile
-    phase1Results.forEach(otherResult => {
-      if (otherResult.profileId !== result.profileId) {
-        const otherProfile = profiles.find(p => p.id === otherResult.profileId);
-        if (otherProfile) {
-          otherProfile.deductions.forEach(deduction => {
-            if (deduction.recipientProfileId === result.profileId) {
-              const deductionKey = `${otherProfile.id}-${deduction.id}`;
-              const isApplied = appliedDeductions[deductionKey] !== false;
-              
-              if (isApplied) {
-                // Find this specific deduction in the breakdown
-                const deductionDetail = otherResult.deductionBreakdown.find(
-                  d => d.deductionId === deduction.id
-                );
-                
-                if (deductionDetail) {
-                  receivedFromOthers += deductionDetail.amount;
-                }
-              }
-            }
-          });
-        }
-      }
-    });
-    
-    return {
-      ...result,
-      receivedFromOthers,
-      netAmount: result.netAmount + receivedFromOthers
-    };
-  });
-
-  setCalculations(phase2Results);
-
-  // Calculate client payment
-  const totalAmount = phase2Results.reduce((sum, result) => sum + result.grossAmount, 0);
-  const totalHours = phase2Results.reduce((sum, result) => sum + result.totalHours, 0);
-  const averageRate = totalHours > 0 ? totalAmount / totalHours : 0;
-
-  setClientPayment({
-    totalAmount,
-    totalHours,
-    averageRate,
-  });
-
-  // Calculate payment distribution
-  const totalNetAmount = phase2Results.reduce((sum, result) => sum + result.netAmount, 0);
-  const distribution: PaymentDistribution[] = phase2Results.map(result => ({
-    profileId: result.profileId,
-    profileName: result.profileName,
-    amount: result.netAmount,
-    percentage: totalNetAmount > 0 ? (result.netAmount / totalNetAmount) * 100 : 0,
-  }));
-
-  setPaymentDistribution(distribution);
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  }, [calculateTotals]);
 
   const toggleDeduction = (profileId: string, deductionId: string) => {
     const deductionKey = `${profileId}-${deductionId}`;
@@ -432,6 +397,8 @@ const calculateTotals = () => {
     setProfileForm({
       name: '',
       hourlyRates: [],
+      clientRates: [],
+      profitDistributions: [],
       deductionType: 'Uurloon',
       deductions: [],
     });
@@ -445,7 +412,7 @@ const calculateTotals = () => {
     }
 
     // Validate that all hourly rates have valid data
-    const hasInvalidRates = profileForm.hourlyRates.some(rate =>
+    const hasInvalidRates = profileForm.hourlyRates.some(rate => 
       !rate.label.trim() || rate.rate <= 0
     );
     if (hasInvalidRates) {
@@ -459,6 +426,14 @@ const calculateTotals = () => {
       hourlyRates: profileForm.hourlyRates.map((rate, index) => ({
         id: editingProfile?.hourlyRates[index]?.id || generateId(),
         ...rate,
+      })),
+      clientRates: profileForm.clientRates.map((rate, index) => ({
+        id: editingProfile?.clientRates[index]?.id || generateId(),
+        ...rate,
+      })),
+      profitDistributions: profileForm.profitDistributions.map((dist, index) => ({
+        id: editingProfile?.profitDistributions[index]?.id || generateId(),
+        ...dist,
       })),
       deductionType: profileForm.deductionType,
       deductions: profileForm.deductions.map((d, index) => ({
@@ -480,6 +455,22 @@ const calculateTotals = () => {
     setIsProfileModalOpen(false);
     setEditingProfile(null);
   };
+  // const handleEditProfile = (profile: Profile) => {
+  //   setEditingProfile(profile);
+  //   setProfileForm({
+  //     name: profile.name,
+  //     hourlyRate: profile.hourlyRate,
+  //     deductionType: profile.deductionType,
+  //     deductions: profile.deductions.map(d => ({
+  //       name: d.name,
+  //       amount: d.amount,
+  //       type: d.type,
+  //       priority: d.priority,
+  //       appliesTo: d.appliesTo,
+  //     })),
+  //   });
+  //   setIsProfileModalOpen(true);
+  // };
 
   // Add this delete function
   const handleDeleteProfile = (profile: Profile) => {
@@ -569,6 +560,62 @@ const calculateTotals = () => {
     const newDeductions = [...profileForm.deductions];
     newDeductions[index] = { ...newDeductions[index], [field]: value };
     setProfileForm({ ...profileForm, deductions: newDeductions });
+  };
+
+  // Client rates management functions
+  const addClientRate = () => {
+    setProfileForm({
+      ...profileForm,
+      clientRates: [
+        ...profileForm.clientRates,
+        {
+          label: '',
+          rate: 0,
+          employeeRateId: '',
+        },
+      ],
+    });
+  };
+
+  const removeClientRate = (index: number) => {
+    setProfileForm({
+      ...profileForm,
+      clientRates: profileForm.clientRates.filter((_, i) => i !== index),
+    });
+  };
+
+  const updateClientRate = (index: number, field: string, value: string | number) => {
+    const newRates = [...profileForm.clientRates];
+    newRates[index] = { ...newRates[index], [field]: value };
+    setProfileForm({ ...profileForm, clientRates: newRates });
+  };
+
+  // Profit distribution management functions
+  const addProfitDistribution = () => {
+    setProfileForm({
+      ...profileForm,
+      profitDistributions: [
+        ...profileForm.profitDistributions,
+        {
+          name: '',
+          percentage: 0,
+          type: 'profit_share',
+        },
+      ],
+    });
+  };
+
+  const removeProfitDistribution = (index: number) => {
+    setProfileForm({
+      ...profileForm,
+      profitDistributions: profileForm.profitDistributions.filter((_, i) => i !== index),
+    });
+  };
+
+  const updateProfitDistribution = (index: number, field: string, value: string | number) => {
+    const newDistributions = [...profileForm.profitDistributions];
+    newDistributions[index] = { ...newDistributions[index], [field]: value };
+    setProfileForm({ ...profileForm, profitDistributions: newDistributions });
   };
 
   // Hours management functions
@@ -729,8 +776,8 @@ const calculateTotals = () => {
       yPosition += 15;
 
       // Prepare table data
-      const headers = ['Naam', 'Uren', 'Tarief', 'Bruto', 'Aftrek', 'Ontvangen', 'Netto'];
-      const colWidths = [30, 20, 25, 25, 25, 25, 30];
+      const headers = ['Naam', 'Uren', 'Tarief', 'Bruto', 'Aftrek', 'Netto'];
+      const colWidths = [40, 25, 30, 30, 30, 30];
       const rowHeight = 15;
 
       // Create table data with headers and rows
@@ -755,7 +802,6 @@ const calculateTotals = () => {
           formatCurrency(averageRate),
           formatCurrency(calc.grossAmount),
           formatCurrency(calc.totalDeductions),
-          formatCurrency(calc.receivedFromOthers),
           formatCurrency(calc.netAmount)
         ];
         tableData.push(rowData);
@@ -765,7 +811,7 @@ const calculateTotals = () => {
       const rowHeights = Array(tableData.length).fill(rowHeight);
 
       // Draw table with proper cells
-      doc.setFontSize(8);
+      doc.setFontSize(10);
       drawTable(20, yPosition, colWidths, rowHeights, tableData, true);
       yPosition += (rowHeights.reduce((sum, height) => sum + height, 0)) + 20;
     }
@@ -1104,10 +1150,9 @@ const calculateTotals = () => {
                 <h4 className="font-medium text-blue-900 mb-2">📊 Hoe worden de berekeningen gemaakt?</h4>
                 <div className="text-sm text-blue-800 space-y-1">
                   <div><strong>Bruto = Uren × Uurtarief</strong> (bijv. 2 uur × €10,00 = €20,00)</div>
-                  <div><strong>Netto = Bruto - Aftrekkingen + Ontvangen van anderen</strong></div>
-                  <div><strong>Aftrekkingen kunnen worden doorgestort naar andere profielen</strong></div>
+                  <div><strong>Netto = Bruto - Aftrekkingen</strong> (bijv. €20,00 - €2,00 = €18,00)</div>
                   <div className="text-xs text-blue-600 mt-2">
-                    💡 Tip: Stel complexe verdelingen in via het profielbeheer
+                    💡 Tip: Voeg uren toe met de groene "Uren Toevoegen" knop om positieve bedragen te zien
                   </div>
                 </div>
               </div>
@@ -1165,12 +1210,6 @@ const calculateTotals = () => {
                       </th>
                       <th className="text-right py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r ">
                         <div className="flex items-center justify-end">
-                          <Download className="h-4 w-4 mr-2 text-green-600" />
-                          Ontvangen
-                        </div>
-                      </th>
-                      <th className="text-right py-4 px-6 font-semibold text-slate-700 border-b border-slate-200 border-r ">
-                        <div className="flex items-center justify-end">
                           <Calculator className="h-4 w-4 mr-2 text-green-600" />
                           Netto
                         </div>
@@ -1181,13 +1220,19 @@ const calculateTotals = () => {
                           Aftrekkingen
                         </div>
                       </th>
+                      <th className="text-center py-4 px-6 font-semibold text-slate-700 border-b border-slate-200">
+                        <div className="flex items-center justify-center">
+                          <Calculator className="h-4 w-4 mr-2 text-purple-600" />
+                          Winstverdeling
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {calculations.map((calc, index) => {
                       const profile = profiles.find(p => p.id === calc.profileId);
                       const hasHours = calc.totalHours > 0;
-
+                      
                       // Calculate average hourly rate for this profile
                       const profileEntries = hoursEntries.filter(entry => entry.profileId === calc.profileId);
                       let totalEarnings = 0;
@@ -1239,11 +1284,6 @@ const calculateTotals = () => {
                             </div>
                           </td>
                           <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
-                            <div className="text-mono font-semibold text-green-600">
-                              +{formatCurrency(calc.receivedFromOthers)}
-                            </div>
-                          </td>
-                          <td className="py-4 px-6 text-right border-b border-slate-200 border-r ">
                             <div className={`text-mono font-bold text-lg ${calc.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                               {formatCurrency(calc.netAmount)}
                             </div>
@@ -1256,13 +1296,8 @@ const calculateTotals = () => {
 
                                 return (
                                   <div key={deduction.id} className="flex items-center justify-center space-x-2">
-                                    <span className="text-xs text-slate-600 truncate max-w-20" title={deduction.name}>
+                                    <span className="text-xs text-slate-600 truncate max-w-20">
                                       {deduction.name}
-                                      {deduction.recipientProfileId && (
-                                        <span className="text-xs text-slate-400 block">
-                                          → {profiles.find(p => p.id === deduction.recipientProfileId)?.name || 'Onbekend'}
-                                        </span>
-                                      )}
                                     </span>
                                     <label className="relative inline-flex items-center cursor-pointer">
                                       <input
@@ -1279,6 +1314,35 @@ const calculateTotals = () => {
                               {profile?.deductions.length === 0 && (
                                 <div className="text-xs text-slate-400">
                                   Geen aftrekkingen
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-4 px-6 text-center border-b border-slate-200">
+                            <div className="space-y-2">
+                              {/* Client Payment */}
+                              <div className="text-xs">
+                                <div className="text-blue-600 font-medium">
+                                  Klant: {formatCurrency(calc.revenueBreakdown.clientPayment)}
+                                </div>
+                                <div className="text-slate-500">
+                                  Werknemer: {formatCurrency(calc.revenueBreakdown.employeePayment)}
+                                </div>
+                                <div className="text-green-600 font-medium">
+                                  Winst: {formatCurrency(calc.revenueBreakdown.profitMargin)}
+                                </div>
+                              </div>
+                              
+                              {/* Profit Distribution */}
+                              {calc.revenueBreakdown.profitDistribution.map((dist, idx) => (
+                                <div key={idx} className="text-xs text-purple-600">
+                                  {dist.name}: {formatCurrency(dist.amount)}
+                                </div>
+                              ))}
+                              
+                              {calc.revenueBreakdown.profitDistribution.length === 0 && (
+                                <div className="text-xs text-slate-400">
+                                  Geen winstverdeling
                                 </div>
                               )}
                             </div>
@@ -1321,6 +1385,16 @@ const calculateTotals = () => {
                         label: rate.label,
                         rate: rate.rate,
                       })),
+                      clientRates: profile.clientRates.map(rate => ({
+                        label: rate.label,
+                        rate: rate.rate,
+                        employeeRateId: rate.employeeRateId,
+                      })),
+                      profitDistributions: profile.profitDistributions.map(dist => ({
+                        name: dist.name,
+                        percentage: dist.percentage,
+                        type: dist.type,
+                      })),
                       deductionType: profile.deductionType,
                       deductions: profile.deductions.map(d => ({
                         name: d.name,
@@ -1328,7 +1402,6 @@ const calculateTotals = () => {
                         type: d.type,
                         priority: d.priority,
                         appliesTo: d.appliesTo,
-                        recipientProfileId: d.recipientProfileId,
                       })),
                     });
                     setShowProfilesToast(false);
@@ -1338,7 +1411,7 @@ const calculateTotals = () => {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-3">
                       <div className="w-3 h-3 bg-primary-500 rounded-full"></div>
-
+                      
                       <span className="font-medium text-slate-900">{profile.name}</span>
                     </div>
                     <div className="text-sm text-slate-500">
@@ -1541,6 +1614,145 @@ const calculateTotals = () => {
                         </div>
                       )}
                     </div>
+
+                    {/* Client Rates Section */}
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <label className="block text-sm font-medium text-slate-700">
+                          Klant Tarieven (Wat je aan klant vraagt)
+                        </label>
+                        <button
+                          type="button"
+                          className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-blue-600 text-white shadow-soft hover:bg-blue-700 hover:shadow-medium focus:ring-blue-500 active:scale-95"
+                          onClick={addClientRate}
+                        >
+                          <Plus className="h-4 w-4 mr-1" />
+                          Klant Tarief Toevoegen
+                        </button>
+                      </div>
+
+                      {profileForm.clientRates.map((rate, index) => (
+                        <div key={index} className="flex items-center space-x-3 mb-3 p-3 bg-blue-50 rounded-xl">
+                          <input
+                            type="text"
+                            placeholder="Naam klant tarief"
+                            className="flex-1 rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 transition-all duration-200"
+                            value={rate.label}
+                            onChange={(e) => updateClientRate(index, 'label', e.target.value)}
+                          />
+                          <select
+                            className="rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 transition-all duration-200"
+                            value={rate.employeeRateId}
+                            onChange={(e) => updateClientRate(index, 'employeeRateId', e.target.value)}
+                          >
+                            <option value="">Selecteer werknemer tarief</option>
+                            {profileForm.hourlyRates.map((empRate, empIndex) => (
+                              <option key={empIndex} value={empIndex}>
+                                {empRate.label} - {formatCurrency(empRate.rate)}/uur
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="€0.00"
+                            className="w-24 rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 transition-all duration-200"
+                            value={rate.rate || ''}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              updateClientRate(index, 'rate', value === '' ? 0 : parseFloat(value) || 0);
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="p-2 text-slate-400 hover:text-danger-600 transition-colors"
+                            onClick={() => removeClientRate(index)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))}
+
+                      {profileForm.clientRates.length === 0 && (
+                        <div className="text-center py-6 text-slate-500">
+                          <Euro className="h-8 w-8 mx-auto mb-2 text-slate-300" />
+                          <p className="text-sm">Voeg klant tarieven toe om winstmarge te berekenen</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Profit Distribution Section */}
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <label className="block text-sm font-medium text-slate-700">
+                          Winstverdeling
+                        </label>
+                        <button
+                          type="button"
+                          className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none bg-green-600 text-white shadow-soft hover:bg-green-700 hover:shadow-medium focus:ring-green-500 active:scale-95"
+                          onClick={addProfitDistribution}
+                        >
+                          <Plus className="h-4 w-4 mr-1" />
+                          Winstverdeling Toevoegen
+                        </button>
+                      </div>
+
+                      {profileForm.profitDistributions.map((dist, index) => (
+                        <div key={index} className="flex flex-col space-y-3 mb-4 p-3 bg-green-50 rounded-xl">
+                          <div className="flex items-center space-x-3">
+                            <input
+                              type="text"
+                              placeholder="Naam (bijv. Dylan, Mijn Marge)"
+                              className="flex-1 rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-green-500 focus:ring-offset-0 transition-all duration-200"
+                              value={dist.name}
+                              onChange={(e) => updateProfitDistribution(index, 'name', e.target.value)}
+                            />
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="0"
+                              max="100"
+                              placeholder="Percentage"
+                              className="w-24 rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-green-500 focus:ring-offset-0 transition-all duration-200"
+                              value={dist.percentage || ''}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                updateProfitDistribution(index, 'percentage', value === '' ? 0 : parseFloat(value) || 0);
+                              }}
+                            />
+                            <select
+                              className="rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 focus:ring-2 focus:ring-green-500 focus:ring-offset-0 transition-all duration-200"
+                              value={dist.type}
+                              onChange={(e) => updateProfitDistribution(index, 'type', e.target.value)}
+                            >
+                              <option value="margin">Van werknemer betaling</option>
+                              <option value="profit_share">Van winstmarge</option>
+                            </select>
+                            <button
+                              type="button"
+                              className="p-2 text-slate-400 hover:text-danger-600 transition-colors"
+                              onClick={() => removeProfitDistribution(index)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                          <div className="text-xs text-slate-600 pl-2">
+                            {dist.type === 'margin' 
+                              ? `Krijgt ${dist.percentage}% van wat de werknemer verdient`
+                              : `Krijgt ${dist.percentage}% van de winstmarge (klant betaling - werknemer betaling)`
+                            }
+                          </div>
+                        </div>
+                      ))}
+
+                      {profileForm.profitDistributions.length === 0 && (
+                        <div className="text-center py-6 text-slate-500">
+                          <Calculator className="h-8 w-8 mx-auto mb-2 text-slate-300" />
+                          <p className="text-sm">Voeg winstverdeling toe om automatisch te berekenen</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Deduction Type */}
@@ -1630,60 +1842,60 @@ const calculateTotals = () => {
                         </div>
 
                         {/* Who does this deduction apply to? */}
-                        <div className="flex items-center space-x-4 pl-2">
-                          <span className="text-sm text-slate-600">Van toepassing op:</span>
-                          <label className="flex items-center">
-                            <input
-                              type="radio"
-                              name={`deduction-applies-to-${index}`}
-                              value="employee"
-                              checked={deduction.appliesTo === 'employee'}
-                              onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
-                              className="mr-2"
-                            />
-                            Werknemer
-                          </label>
-                          <label className="flex items-center">
-                            <input
-                              type="radio"
-                              name={`deduction-applies-to-${index}`}
-                              value="employer"
-                              checked={deduction.appliesTo === 'employer'}
-                              onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
-                              className="mr-2"
-                            />
-                            Werkgever
-                          </label>
-                          <label className="flex items-center">
-                            <input
-                              type="radio"
-                              name={`deduction-applies-to-${index}`}
-                              value="both"
-                              checked={deduction.appliesTo === 'both'}
-                              onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
-                              className="mr-2"
-                            />
-                            Beide
-                          </label>
-                        </div>
-
-                        {/* Recipient selection for deductions that go to other profiles */}
-                        <div className="flex items-center space-x-3 pl-2">
-                          <span className="text-sm text-slate-600">Gaat naar:</span>
-                          <select
-                            className="rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0 transition-all duration-200"
-                            value={deduction.recipientProfileId || ''}
-                            onChange={(e) => updateDeduction(index, 'recipientProfileId', e.target.value)}
-                          >
-                            <option value="">-- Houdt zelf --</option>
-                            {profiles
-                              .filter(p => p.id !== (editingProfile?.id || ''))
-                              .map(profile => (
-                                <option key={profile.id} value={profile.id}>
-                                  {profile.name}
-                                </option>
-                              ))}
-                          </select>
+                        <div className="space-y-3 pl-2">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-sm font-medium text-slate-700">Van toepassing op:</span>
+                            <div className="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded">
+                              Wie betaalt deze aftrekking?
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-4">
+                            <label className="flex items-center space-x-2 p-2 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`deduction-applies-to-${index}`}
+                                value="employee"
+                                checked={deduction.appliesTo === 'employee'}
+                                onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
+                                className="mr-2"
+                              />
+                              <div>
+                                <div className="text-sm font-medium text-slate-700">Werknemer</div>
+                                <div className="text-xs text-slate-500">Aftrekking gaat van werknemer loon</div>
+                              </div>
+                            </label>
+                            <label className="flex items-center space-x-2 p-2 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`deduction-applies-to-${index}`}
+                                value="employer"
+                                checked={deduction.appliesTo === 'employer'}
+                                onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
+                                className="mr-2"
+                              />
+                              <div>
+                                <div className="text-sm font-medium text-slate-700">Werkgever</div>
+                                <div className="text-xs text-slate-500">Aftrekking gaat van werkgever kosten</div>
+                              </div>
+                            </label>
+                            <label className="flex items-center space-x-2 p-2 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`deduction-applies-to-${index}`}
+                                value="both"
+                                checked={deduction.appliesTo === 'both'}
+                                onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
+                                className="mr-2"
+                              />
+                              <div>
+                                <div className="text-sm font-medium text-slate-700">Beide</div>
+                                <div className="text-xs text-slate-500">Aftrekking wordt gedeeld</div>
+                              </div>
+                            </label>
+                          </div>
+                          <div className="text-xs text-slate-500 bg-blue-50 p-2 rounded">
+                            💡 <strong>Voorbeeld:</strong> Sociale premies (werknemer), werkgeversverzekering (werkgever), of pensioenpremie (beide)
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -1755,8 +1967,8 @@ const calculateTotals = () => {
                       value={hoursForm.profileId}
                       onChange={(e) => {
                         const selectedProfile = profiles.find(p => p.id === e.target.value);
-                        setHoursForm({
-                          ...hoursForm,
+                        setHoursForm({ 
+                          ...hoursForm, 
                           profileId: e.target.value,
                           hourlyRateId: selectedProfile?.hourlyRates && selectedProfile.hourlyRates.length > 0 ? selectedProfile.hourlyRates[0].id : ''
                         });
