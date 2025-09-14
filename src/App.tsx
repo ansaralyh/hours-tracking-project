@@ -211,21 +211,25 @@ function App() {
   useEffect(() => {
     if (profiles.length > 0) {
       const newAppliedDeductions: Record<string, boolean> = { ...appliedDeductions };
+      let hasChanges = false;
 
       profiles.forEach(profile => {
         profile.deductions.forEach(deduction => {
           const deductionKey = `${profile.id}-${deduction.id}`;
           if (newAppliedDeductions[deductionKey] === undefined) {
             newAppliedDeductions[deductionKey] = true; // Default to applied
+            hasChanges = true;
           }
         });
       });
 
+      if (hasChanges) {
       setAppliedDeductions(newAppliedDeductions);
+      }
     }
-  }, [profiles, appliedDeductions]);
+  }, [profiles]);
 
-  const calculateRevenueBreakdown = (profile: Profile, profileEntries: HoursEntry[], employeePayment: number): RevenueBreakdown => {
+  const calculateRevenueBreakdown = useCallback((profile: Profile, profileEntries: HoursEntry[], employeePayment: number): RevenueBreakdown => {
     // Calculate client payment based on client rates
     let clientPayment = 0;
     profileEntries.forEach(entry => {
@@ -280,7 +284,7 @@ function App() {
       profitMargin,
       profitDistribution: profitDistributions,
     };
-  };
+  }, []);
 
   const calculateTotals = useCallback(() => {
     // Group hours by profile
@@ -312,7 +316,7 @@ function App() {
         .sort((a, b) => a.priority - b.priority)
         .map(deduction => {
           const deductionKey = `${profile.id}-${deduction.id}`;
-          const isApplied = appliedDeductions[deductionKey] !== false;
+          const isApplied = appliedDeductions[deductionKey] === true;
 
           const amount = isApplied
             ? (deduction.type === 'percentage'
@@ -366,7 +370,7 @@ function App() {
     }));
 
     setPaymentDistribution(distribution);
-  }, [profiles, hoursEntries, appliedDeductions]);
+  }, [profiles, hoursEntries, appliedDeductions, calculateRevenueBreakdown]);
 
   // Calculate totals whenever data changes
   useEffect(() => {
@@ -375,10 +379,14 @@ function App() {
 
   const toggleDeduction = (profileId: string, deductionId: string) => {
     const deductionKey = `${profileId}-${deductionId}`;
-    setAppliedDeductions(prev => ({
+    setAppliedDeductions(prev => {
+      const currentValue = prev[deductionKey];
+      const newValue = currentValue === true ? false : true;
+      return {
       ...prev,
-      [deductionKey]: !prev[deductionKey]
-    }));
+        [deductionKey]: newValue
+      };
+    });
   };
 
   const formatCurrency = (amount: number) => {
@@ -1289,39 +1297,45 @@ function App() {
                             </div>
                           </td>
                           <td className="py-4 px-6 text-center border-b border-slate-200">
-                            <div className="space-y-2">
+                            <div className="space-y-1">
                               {profile?.deductions.map(deduction => {
                                 const deductionKey = `${profile.id}-${deduction.id}`;
-                                const isApplied = appliedDeductions[deductionKey] !== false;
+                                const isApplied = appliedDeductions[deductionKey] === true;
 
                                 return (
-                                  <div key={deduction.id} className="flex items-center justify-center space-x-2">
-                                    <span className="text-xs text-slate-600 truncate max-w-20">
+                                  <div key={deduction.id} className="flex items-center justify-center space-x-3 h-8">
+                                    <span className="text-xs text-slate-600 truncate max-w-20 flex-shrink-0 flex items-center h-full">
                                       {deduction.name}
                                     </span>
-                                    <label className="relative inline-flex items-center cursor-pointer">
-                                      <input
-                                        type="checkbox"
-                                        checked={isApplied}
-                                        onChange={() => toggleDeduction(profile.id, deduction.id)}
-                                        className="sr-only peer"
-                                      />
-                                      <div className="w-8 h-4 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-primary-600"></div>
-                                    </label>
+                                    <button
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        toggleDeduction(profile.id, deduction.id);
+                                      }}
+                                      className={`relative inline-flex items-center justify-center cursor-pointer flex-shrink-0 w-9 h-5 rounded-full transition-all duration-200 ease-in-out hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1 ${
+                                        isApplied ? 'bg-primary-600 hover:bg-primary-700' : 'bg-slate-300 hover:bg-slate-400'
+                                      }`}
+                                      title={`Toggle ${deduction.name} deduction`}
+                                    >
+                                      <div className={`w-4 h-4 bg-white rounded-full shadow-sm transform transition-transform duration-200 ease-in-out ${
+                                        isApplied ? 'translate-x-3.5' : 'translate-x-0.5'
+                                      }`}></div>
+                                    </button>
                                   </div>
                                 );
                               })}
                               {profile?.deductions.length === 0 && (
-                                <div className="text-xs text-slate-400">
+                                <div className="text-xs text-slate-400 h-8 flex items-center justify-center">
                                   Geen aftrekkingen
                                 </div>
                               )}
                             </div>
                           </td>
                           <td className="py-4 px-6 text-center border-b border-slate-200">
-                            <div className="space-y-2">
+                            <div className="space-y-1">
                               {/* Client Payment */}
-                              <div className="text-xs">
+                              <div className="text-xs space-y-1">
                                 <div className="text-blue-600 font-medium">
                                   Klant: {formatCurrency(calc.revenueBreakdown.clientPayment)}
                                 </div>
@@ -1334,14 +1348,18 @@ function App() {
                               </div>
                               
                               {/* Profit Distribution */}
-                              {calc.revenueBreakdown.profitDistribution.map((dist, idx) => (
-                                <div key={idx} className="text-xs text-purple-600">
-                                  {dist.name}: {formatCurrency(dist.amount)}
+                              {calc.revenueBreakdown.profitDistribution.length > 0 && (
+                                <div className="border-t border-slate-200 pt-1 mt-1">
+                                  {calc.revenueBreakdown.profitDistribution.map((dist, idx) => (
+                                    <div key={idx} className="text-xs text-purple-600">
+                                      {dist.name}: {formatCurrency(dist.amount)}
+                                    </div>
+                                  ))}
                                 </div>
-                              ))}
+                              )}
                               
                               {calc.revenueBreakdown.profitDistribution.length === 0 && (
-                                <div className="text-xs text-slate-400">
+                                <div className="text-xs text-slate-400 mt-1">
                                   Geen winstverdeling
                                 </div>
                               )}
@@ -1851,47 +1869,47 @@ function App() {
                           </div>
                           <div className="flex flex-wrap gap-4">
                             <label className="flex items-center space-x-2 p-2 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer">
-                              <input
-                                type="radio"
-                                name={`deduction-applies-to-${index}`}
-                                value="employee"
-                                checked={deduction.appliesTo === 'employee'}
-                                onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
-                                className="mr-2"
-                              />
+                            <input
+                              type="radio"
+                              name={`deduction-applies-to-${index}`}
+                              value="employee"
+                              checked={deduction.appliesTo === 'employee'}
+                              onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
+                              className="mr-2"
+                            />
                               <div>
                                 <div className="text-sm font-medium text-slate-700">Werknemer</div>
                                 <div className="text-xs text-slate-500">Aftrekking gaat van werknemer loon</div>
                               </div>
-                            </label>
+                          </label>
                             <label className="flex items-center space-x-2 p-2 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer">
-                              <input
-                                type="radio"
-                                name={`deduction-applies-to-${index}`}
-                                value="employer"
-                                checked={deduction.appliesTo === 'employer'}
-                                onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
-                                className="mr-2"
-                              />
+                            <input
+                              type="radio"
+                              name={`deduction-applies-to-${index}`}
+                              value="employer"
+                              checked={deduction.appliesTo === 'employer'}
+                              onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
+                              className="mr-2"
+                            />
                               <div>
                                 <div className="text-sm font-medium text-slate-700">Werkgever</div>
                                 <div className="text-xs text-slate-500">Aftrekking gaat van werkgever kosten</div>
                               </div>
-                            </label>
+                          </label>
                             <label className="flex items-center space-x-2 p-2 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer">
-                              <input
-                                type="radio"
-                                name={`deduction-applies-to-${index}`}
-                                value="both"
-                                checked={deduction.appliesTo === 'both'}
-                                onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
-                                className="mr-2"
-                              />
+                            <input
+                              type="radio"
+                              name={`deduction-applies-to-${index}`}
+                              value="both"
+                              checked={deduction.appliesTo === 'both'}
+                              onChange={(e) => updateDeduction(index, 'appliesTo', e.target.value as 'employee' | 'employer' | 'both')}
+                              className="mr-2"
+                            />
                               <div>
                                 <div className="text-sm font-medium text-slate-700">Beide</div>
                                 <div className="text-xs text-slate-500">Aftrekking wordt gedeeld</div>
                               </div>
-                            </label>
+                          </label>
                           </div>
                           <div className="text-xs text-slate-500 bg-blue-50 p-2 rounded">
                             💡 <strong>Voorbeeld:</strong> Sociale premies (werknemer), werkgeversverzekering (werkgever), of pensioenpremie (beide)
