@@ -1380,6 +1380,12 @@ function App() {
                           Winstverdeling
                         </div>
                       </th>
+                      <th className="text-center py-4 px-6 font-semibold text-slate-700 border-b border-slate-200">
+                        <div className="flex items-center justify-center">
+                          <Trash2 className="h-4 w-4 mr-2 text-red-600" />
+                          Acties
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1520,6 +1526,22 @@ function App() {
                                 </div>
                               </details>
                             </div>
+                          </td>
+                          <td className="py-4 px-6 text-center border-b border-slate-200">
+                            <button
+                              onClick={() => {
+                                const profileEntries = hoursEntries.filter(entry => entry.profileId === calc.profileId);
+                                if (profileEntries.length > 0 && confirm(`Weet je zeker dat je alle ${calc.totalHours} uren van ${calc.profileName} wilt verwijderen?`)) {
+                                  const newHoursEntries = hoursEntries.filter(entry => entry.profileId !== calc.profileId);
+                                  setHoursEntries(newHoursEntries);
+                                }
+                              }}
+                              className="inline-flex items-center justify-center p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              disabled={calc.totalHours === 0}
+                              title="Verwijder alle uren van dit profiel"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
                           </td>
                         </tr>
                       );
