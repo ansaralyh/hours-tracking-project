@@ -781,6 +781,13 @@ function App() {
     );
   };
 
+  const handleDeleteHourEntry = (entryId: string) => {
+    if (confirm('Weet je zeker dat je deze uren wilt verwijderen?')) {
+      const newHoursEntries = hoursEntries.filter(entry => entry.id !== entryId);
+      setHoursEntries(newHoursEntries);
+    }
+  };
+
   // PDF Export functions
   const generatePDF = () => {
     const doc = new jsPDF();
@@ -1207,27 +1214,58 @@ function App() {
                     const dayEntries = getHoursForDate(date);
                     const totalHours = dayEntries.reduce((sum, entry) => sum + entry.hours, 0);
                     return (
-                      <div key={date} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-                        <div>
-                          <div className="font-medium text-slate-900">
-                            {new Date(date).toLocaleDateString('nl-NL', {
-                              weekday: 'long',
-                              year: 'numeric',
-                              month: 'long',
-                              day: 'numeric'
-                            })}
+                      <div key={date} className="bg-slate-50 rounded-xl overflow-hidden">
+                        <div className="flex items-center justify-between p-3">
+                          <div>
+                            <div className="font-medium text-slate-900">
+                              {new Date(date).toLocaleDateString('nl-NL', {
+                                weekday: 'long',
+                                year: 'numeric',
+                                month: 'long',
+                                day: 'numeric'
+                              })}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              {dayEntries.length} {dayEntries.length === 1 ? 'entry' : 'entries'}
+                            </div>
                           </div>
-                          <div className="text-xs text-slate-500">
-                            {dayEntries.length} {dayEntries.length === 1 ? 'entry' : 'entries'}
+                          <div className="text-right">
+                            <div className="font-semibold text-slate-900">
+                              {formatHours(totalHours)}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              {formatCurrency(totalHours * clientPayment.averageRate)}
+                            </div>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="font-semibold text-slate-900">
-                            {formatHours(totalHours)}
-                          </div>
-                          <div className="text-xs text-slate-500">
-                            {formatCurrency(totalHours * clientPayment.averageRate)}
-                          </div>
+                        {/* Individual hour entries */}
+                        <div className="space-y-1 px-3 pb-3">
+                          {dayEntries.map(entry => {
+                            const profile = profiles.find(p => p.id === entry.profileId);
+                            const rate = profile?.hourlyRates.find(r => r.id === entry.hourlyRateId);
+                            return (
+                              <div key={entry.id} className="flex items-center justify-between bg-white p-2 rounded-lg text-xs group">
+                                <div className="flex-1">
+                                  <span className="font-medium text-slate-700">{profile?.name}</span>
+                                  <span className="text-slate-500"> • {rate?.label}</span>
+                                  <span className="text-slate-400"> • {formatHours(entry.hours)}</span>
+                                  {entry.description && (
+                                    <div className="text-slate-400 text-xs mt-0.5">{entry.description}</div>
+                                  )}
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                  <span className="font-medium text-slate-900">{formatCurrency(entry.hours * (rate?.rate || 0))}</span>
+                                  <button
+                                    onClick={() => handleDeleteHourEntry(entry.id)}
+                                    className="opacity-0 group-hover:opacity-100 p-1 text-red-600 hover:bg-red-50 rounded transition-all"
+                                    title="Verwijder uren"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     );
