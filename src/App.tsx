@@ -24,6 +24,16 @@ interface ProfitDistribution {
   type: 'margin' | 'profit_share';
 }
 
+interface StepByStepCalculation {
+  step1ClientRate: number;
+  step2WorkerRate: number;
+  step3LeftoverAfterWorker: number;
+  step4ManagementFee: number;
+  step5LeftoverAfterManagement: number;
+  step6RobertShare: number;
+  step7DylanShare: number;
+}
+
 interface Profile {
   id: string;
   name: string;
@@ -63,6 +73,17 @@ interface RevenueBreakdown {
     amount: number;
     percentage: number;
   }>;
+  stepByStepCalculation: StepByStepCalculation;
+  finalDistribution: {
+    client: { rate: number; total: number };
+    worker: { rate: number; total: number };
+    profitDistributions: Array<{
+      name: string;
+      managementFee: number;
+      profitShare: number;
+      total: number;
+    }>;
+  };
 }
 
 interface CalculationResult {
@@ -227,15 +248,21 @@ function App() {
       setAppliedDeductions(newAppliedDeductions);
       }
     }
-  }, [profiles]);
+  }, [profiles, appliedDeductions]);
 
   const calculateRevenueBreakdown = useCallback((profile: Profile, profileEntries: HoursEntry[], employeePayment: number): RevenueBreakdown => {
     // Calculate client payment based on client rates
     let clientPayment = 0;
+    let totalHours = 0;
+    let clientRatePerHour = 0;
+    let workerRatePerHour = 0;
+
     profileEntries.forEach(entry => {
+      totalHours += entry.hours;
       // Find the corresponding hourly rate for this entry
       const hourlyRate = profile.hourlyRates.find(rate => rate.id === entry.hourlyRateId);
       if (hourlyRate) {
+        workerRatePerHour = hourlyRate.rate; // Use the worker rate
         // Find client rate that corresponds to this hourly rate
         const clientRate = profile.clientRates.find(rate => {
           // For now, we'll match by index since we're using form indices
@@ -244,23 +271,102 @@ function App() {
         });
         
         if (clientRate) {
+          clientRatePerHour = clientRate.rate;
           clientPayment += entry.hours * clientRate.rate;
         } else {
           // If no client rate found, use employee rate * 2 as default client rate
+          clientRatePerHour = hourlyRate.rate * 2;
           clientPayment += entry.hours * hourlyRate.rate * 2;
         }
       }
     });
 
-    // If no client rates are set, use employee payment * 2 as client payment
-    if (clientPayment === 0) {
+    // If no client rates are set, use employee rate * 2 as client rate
+    if (clientRatePerHour === 0 && workerRatePerHour > 0) {
+      clientRatePerHour = workerRatePerHour * 2;
+      clientPayment = employeePayment * 2;
+    }
+    
+    // Final fallback: if still no client rate, use employee payment * 2
+    if (clientRatePerHour === 0 && totalHours > 0) {
+      clientRatePerHour = (employeePayment / totalHours) * 2;
       clientPayment = employeePayment * 2;
     }
 
     // Calculate profit margin (difference between client payment and employee payment)
     const profitMargin = clientPayment - employeePayment;
 
-    // Calculate profit distribution
+    // NEW 5-STEP FORMULA IMPLEMENTATION
+    // Step 1: Client rate per hour
+    const step1ClientRate = clientRatePerHour || 0;
+    
+    // Step 2: Worker rate per hour  
+    const step2WorkerRate = workerRatePerHour || 0;
+    
+    // Step 3: Leftover after worker payment
+    const step3LeftoverAfterWorker = step1ClientRate - step2WorkerRate;
+    
+    // Step 4: Management fee (10% of leftover)
+    const step4ManagementFee = Math.max(0, step3LeftoverAfterWorker * 0.10);
+    
+    // Step 5: Leftover after management fee
+    const step5LeftoverAfterManagement = Math.max(0, step3LeftoverAfterWorker - step4ManagementFee);
+    
+    // Step 6: Robert gets 50% of remaining leftover
+    const step6RobertShare = step5LeftoverAfterManagement * 0.50;
+    
+    // Step 7: Dylan gets 50% of remaining leftover
+    const step7DylanShare = step5LeftoverAfterManagement * 0.50;
+
+    const stepByStepCalculation: StepByStepCalculation = {
+      step1ClientRate,
+      step2WorkerRate,
+      step3LeftoverAfterWorker,
+      step4ManagementFee,
+      step5LeftoverAfterManagement,
+      step6RobertShare,
+      step7DylanShare,
+    };
+
+    // Calculate final distribution totals using configured profit distribution names
+    const finalDistribution = {
+      client: { 
+        rate: step1ClientRate, 
+        total: step1ClientRate * totalHours 
+      },
+      worker: { 
+        rate: step2WorkerRate, 
+        total: step2WorkerRate * totalHours 
+      },
+      profitDistributions: [
+        // Always use default names for the 5-step formula
+        {
+          name: "Robert",
+          managementFee: step4ManagementFee * totalHours,
+          profitShare: step6RobertShare * totalHours,
+          total: (step4ManagementFee + step6RobertShare) * totalHours
+        },
+        {
+          name: "Dylan",
+          managementFee: 0,
+          profitShare: step7DylanShare * totalHours,
+          total: step7DylanShare * totalHours
+        }
+      ]
+    };
+
+    // Debug logging
+    console.log('Revenue Breakdown Debug:', {
+      totalHours,
+      clientRatePerHour,
+      workerRatePerHour,
+      step1ClientRate,
+      step2WorkerRate,
+      finalDistribution,
+      profitDistributions: profile.profitDistributions
+    });
+
+    // Keep old profit distribution for backward compatibility (but it won't be used in new display)
     const profitDistributions = profile.profitDistributions.map(dist => {
       let amount = 0;
       if (dist.type === 'margin') {
@@ -283,6 +389,8 @@ function App() {
       employeePayment,
       profitMargin,
       profitDistribution: profitDistributions,
+      stepByStepCalculation,
+      finalDistribution,
     };
   }, []);
 
@@ -1333,36 +1441,46 @@ function App() {
                             </div>
                           </td>
                           <td className="py-4 px-6 text-center border-b border-slate-200">
-                            <div className="space-y-1">
-                              {/* Client Payment */}
-                              <div className="text-xs space-y-1">
+                            <div className="space-y-2 text-xs">
+                              {/* NEW FORMAT: Step-by-step breakdown */}
+                              <div className="space-y-1">
                                 <div className="text-blue-600 font-medium">
-                                  Klant: {formatCurrency(calc.revenueBreakdown.clientPayment)}
+                                  Client: {calc.totalHours} × {formatCurrency(calc.revenueBreakdown.finalDistribution.client.rate)} = {formatCurrency(calc.revenueBreakdown.finalDistribution.client.total)}
                                 </div>
                                 <div className="text-slate-500">
-                                  Werknemer: {formatCurrency(calc.revenueBreakdown.employeePayment)}
+                                  {calc.profileName}: {calc.totalHours} × {formatCurrency(calc.revenueBreakdown.finalDistribution.worker.rate)} = {formatCurrency(calc.revenueBreakdown.finalDistribution.worker.total)}
                                 </div>
-                                <div className="text-green-600 font-medium">
-                                  Winst: {formatCurrency(calc.revenueBreakdown.profitMargin)}
-                                </div>
+                                {calc.revenueBreakdown.finalDistribution.profitDistributions.map((dist, index) => (
+                                  <div key={index} className={`font-medium ${index === 0 ? 'text-purple-600' : 'text-green-600'}`}>
+                                    {dist.name}: {dist.managementFee > 0 ? `${formatCurrency(dist.profitShare)} + ${formatCurrency(dist.managementFee)} = ` : `${formatCurrency(dist.profitShare)} = `}{formatCurrency(dist.total)}
+                                  </div>
+                                ))}
+                                {calc.revenueBreakdown.finalDistribution.profitDistributions.length === 0 && (
+                                  <div className="text-slate-400 text-xs">
+                                    No profit distribution configured
+                                  </div>
+                                )}
                               </div>
                               
-                              {/* Profit Distribution */}
-                              {calc.revenueBreakdown.profitDistribution.length > 0 && (
-                                <div className="border-t border-slate-200 pt-1 mt-1">
-                                  {calc.revenueBreakdown.profitDistribution.map((dist, idx) => (
-                                    <div key={idx} className="text-xs text-purple-600">
-                                      {dist.name}: {formatCurrency(dist.amount)}
-                                    </div>
-                                  ))}
+                              {/* Step-by-step breakdown (collapsible) */}
+                              <details className="text-xs text-slate-400">
+                                <summary className="cursor-pointer hover:text-slate-600">Show calculation steps</summary>
+                                <div className="mt-2 space-y-1 text-left pl-2 border-l-2 border-slate-200">
+                                  <div>Step 1: Client rate = {formatCurrency(calc.revenueBreakdown.stepByStepCalculation.step1ClientRate)}/hour</div>
+                                  <div>Step 2: Worker rate = {formatCurrency(calc.revenueBreakdown.stepByStepCalculation.step2WorkerRate)}/hour</div>
+                                  <div>Step 3: Leftover = {formatCurrency(calc.revenueBreakdown.stepByStepCalculation.step3LeftoverAfterWorker)}/hour</div>
+                                  <div>Step 4: Management fee (10%) = {formatCurrency(calc.revenueBreakdown.stepByStepCalculation.step4ManagementFee)}/hour</div>
+                                  <div>Step 5: After management = {formatCurrency(calc.revenueBreakdown.stepByStepCalculation.step5LeftoverAfterManagement)}/hour</div>
+                                  {calc.revenueBreakdown.finalDistribution.profitDistributions.length > 0 && (
+                                    <>
+                                      <div>Step 6: {calc.revenueBreakdown.finalDistribution.profitDistributions[0].name} (50%) = {formatCurrency(calc.revenueBreakdown.stepByStepCalculation.step6RobertShare)}/hour</div>
+                                      {calc.revenueBreakdown.finalDistribution.profitDistributions.length > 1 && (
+                                        <div>Step 7: {calc.revenueBreakdown.finalDistribution.profitDistributions[1].name} (50%) = {formatCurrency(calc.revenueBreakdown.stepByStepCalculation.step7DylanShare)}/hour</div>
+                                      )}
+                                    </>
+                                  )}
                                 </div>
-                              )}
-                              
-                              {calc.revenueBreakdown.profitDistribution.length === 0 && (
-                                <div className="text-xs text-slate-400 mt-1">
-                                  Geen winstverdeling
-                                </div>
-                              )}
+                              </details>
                             </div>
                           </td>
                         </tr>
