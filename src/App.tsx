@@ -42,9 +42,7 @@ interface StepByStepCalculation {
   step2WorkerRate: number;
   step3LeftoverAfterWorker: number;
   step4ManagementFee: number;
-  step5LeftoverAfterManagement: number;
-  step6RobertShare: number;
-  step7DylanShare: number;
+  step5RobertProfit: number; // Robert gets all leftover after worker and management fee
 }
 
 interface Profile {
@@ -53,7 +51,6 @@ interface Profile {
   hourlyRates: HourlyRate[];
   clientRates: ClientRate[];
   profitDistributions: ProfitDistribution[];
-  deductionType: "Uurloon" | "Marge";
   deductions: Deduction[];
   createdAt: Date;
   updatedAt: Date;
@@ -167,7 +164,6 @@ function App() {
     hourlyRates: [] as Omit<HourlyRate, "id">[],
     clientRates: [] as Omit<ClientRate, "id">[],
     profitDistributions: [] as Omit<ProfitDistribution, "id">[],
-    deductionType: "Uurloon" as "Uurloon" | "Marge",
     deductions: [] as Omit<Deduction, "id">[],
   });
 
@@ -190,26 +186,30 @@ function App() {
     if (savedProfiles) {
       try {
         const parsedProfiles = JSON.parse(savedProfiles).map(
-          (profile: Profile & { hourlyRate?: number }) => ({
-            ...profile,
-            // Migrate old single hourlyRate to hourlyRates array
-            hourlyRates:
-              profile.hourlyRates ||
-              (profile.hourlyRate
-                ? [
-                    {
-                      id: generateId(),
-                      label: "Standard Rate",
-                      rate: profile.hourlyRate,
-                    },
-                  ]
-                : []),
-            // Initialize new fields if they don't exist
-            clientRates: profile.clientRates || [],
-            profitDistributions: profile.profitDistributions || [],
-            createdAt: new Date(profile.createdAt),
-            updatedAt: new Date(profile.updatedAt),
-          })
+          (profile: Profile & { hourlyRate?: number; deductionType?: string }) => {
+            // Remove deductionType if it exists (no longer used)
+            const { deductionType, ...profileWithoutDeductionType } = profile;
+            return {
+              ...profileWithoutDeductionType,
+              // Migrate old single hourlyRate to hourlyRates array
+              hourlyRates:
+                profile.hourlyRates ||
+                (profile.hourlyRate
+                  ? [
+                      {
+                        id: generateId(),
+                        label: "Standard Rate",
+                        rate: profile.hourlyRate,
+                      },
+                    ]
+                  : []),
+              // Initialize new fields if they don't exist
+              clientRates: profile.clientRates || [],
+              profitDistributions: profile.profitDistributions || [],
+              createdAt: new Date(profile.createdAt),
+              updatedAt: new Date(profile.updatedAt),
+            };
+          }
         );
         setProfiles(parsedProfiles);
       } catch (error) {
@@ -347,12 +347,17 @@ function App() {
       // Calculate profit margin (difference between client payment and employee payment)
       const profitMargin = clientPayment - employeePayment;
 
-      // NEW 5-STEP FORMULA IMPLEMENTATION
-      // Step 1: Client rate per hour
+      // Calculate average worker rate from employee payment (most accurate method)
+      // This ensures we get the correct rate even if there are multiple entries with different rates
+      const averageWorkerRatePerHour = totalHours > 0 ? employeePayment / totalHours : 0;
+
+      // SIMPLIFIED FORMULA: Client -> Robert -> Team members
+      // Step 1: Client rate per hour (what Erika pays)
       const step1ClientRate = clientRatePerHour || 0;
 
-      // Step 2: Worker rate per hour
-      const step2WorkerRate = workerRatePerHour || 0;
+      // Step 2: Worker rate per hour (what team member gets paid)
+      // Use average rate calculated from total payment for accuracy
+      const step2WorkerRate = averageWorkerRatePerHour || 0;
 
       // Step 3: Leftover after worker payment
       const step3LeftoverAfterWorker = step1ClientRate - step2WorkerRate;
@@ -360,29 +365,22 @@ function App() {
       // Step 4: Management fee (10% of leftover)
       const step4ManagementFee = Math.max(0, step3LeftoverAfterWorker * 0.1);
 
-      // Step 5: Leftover after management fee
-      const step5LeftoverAfterManagement = Math.max(
+      // Step 5: Robert gets all remaining profit (after worker and management fee)
+      const step5RobertProfit = Math.max(
         0,
         step3LeftoverAfterWorker - step4ManagementFee
       );
-
-      // Step 6: Robert gets 50% of remaining leftover
-      const step6RobertShare = step5LeftoverAfterManagement * 0.5;
-
-      // Step 7: Dylan gets 50% of remaining leftover
-      const step7DylanShare = step5LeftoverAfterManagement * 0.5;
 
       const stepByStepCalculation: StepByStepCalculation = {
         step1ClientRate,
         step2WorkerRate,
         step3LeftoverAfterWorker,
         step4ManagementFee,
-        step5LeftoverAfterManagement,
-        step6RobertShare,
-        step7DylanShare,
+        step5RobertProfit,
       };
 
-      // Calculate final distribution totals using configured profit distribution names
+      // Calculate final distribution totals
+      // Simplified: Client -> Robert -> Team members
       const finalDistribution = {
         client: {
           rate: step1ClientRate,
@@ -393,18 +391,12 @@ function App() {
           total: step2WorkerRate * totalHours,
         },
         profitDistributions: [
-          // Always use default names for the 5-step formula
+          // Robert gets all profit (management fee + remaining profit)
           {
             name: "Robert",
             managementFee: step4ManagementFee * totalHours,
-            profitShare: step6RobertShare * totalHours,
-            total: (step4ManagementFee + step6RobertShare) * totalHours,
-          },
-          {
-            name: "Dylan",
-            managementFee: 0,
-            profitShare: step7DylanShare * totalHours,
-            total: step7DylanShare * totalHours,
+            profitShare: step5RobertProfit * totalHours,
+            total: (step4ManagementFee + step5RobertProfit) * totalHours,
           },
         ],
       };
@@ -478,7 +470,7 @@ function App() {
         }
       });
 
-      // Calculate deductions (prioritize Uurloon before Marge)
+      // Calculate deductions (sorted by priority)
       let totalDeductions = 0;
       const deductionBreakdown = profile.deductions
         .sort((a, b) => a.priority - b.priority)
@@ -588,7 +580,6 @@ function App() {
       hourlyRates: [],
       clientRates: [],
       profitDistributions: [],
-      deductionType: "Uurloon",
       deductions: [],
     });
     setIsProfileModalOpen(true);
@@ -628,7 +619,6 @@ function App() {
           ...dist,
         })
       ),
-      deductionType: profileForm.deductionType,
       deductions: profileForm.deductions.map((d, index) => ({
         id: editingProfile?.deductions[index]?.id || generateId(),
         ...d,
@@ -1193,11 +1183,15 @@ function App() {
 
         if (data.profiles) {
           const importedProfiles = data.profiles.map(
-            (profile: Profile & { hourlyRate?: number }) => ({
-              ...profile,
-              createdAt: new Date(profile.createdAt),
-              updatedAt: new Date(profile.updatedAt),
-            })
+            (profile: Profile & { hourlyRate?: number; deductionType?: string }) => {
+              // Remove deductionType if it exists (no longer used)
+              const { deductionType, ...profileWithoutDeductionType } = profile;
+              return {
+                ...profileWithoutDeductionType,
+                createdAt: new Date(profile.createdAt),
+                updatedAt: new Date(profile.updatedAt),
+              };
+            }
           );
           setProfiles(importedProfiles);
         }
@@ -1786,11 +1780,24 @@ function App() {
 
                           {calc.revenueBreakdown.finalDistribution.profitDistributions.map(
                             (dist, i) => (
-                              <div
-                                key={i}
-                                className="font-medium text-purple-600"
-                              >
-                                {dist.name}: {formatCurrency(dist.total)}
+                              <div key={i} className="font-medium text-purple-600 space-y-1">
+                                <div>
+                                  {dist.name} (Profit Share): {calc.totalHours} ×{" "}
+                                  {formatCurrency(
+                                    calc.revenueBreakdown.stepByStepCalculation.step5RobertProfit
+                                  )}{" "}
+                                  = {formatCurrency(dist.profitShare)}
+                                </div>
+                                <div>
+                                  {dist.name} (MGMT Fee): {calc.totalHours} ×{" "}
+                                  {formatCurrency(
+                                    calc.revenueBreakdown.stepByStepCalculation.step4ManagementFee
+                                  )}{" "}
+                                  = {formatCurrency(dist.managementFee)}
+                                </div>
+                                <div className="font-bold">
+                                  {dist.name} Total: {formatCurrency(dist.total)}
+                                </div>
                               </div>
                             )
                           )}
@@ -1800,14 +1807,14 @@ function App() {
                           <summary>Toon berekeningen</summary>
                           <div className="mt-2 space-y-1 pl-3 border-l">
                             <p>
-                              Step 1: Client rate ={" "}
+                              Step 1: Client rate (Erika) ={" "}
                               {formatCurrency(
                                 calc.revenueBreakdown.stepByStepCalculation
                                   .step1ClientRate
                               )}
                             </p>
                             <p>
-                              Step 2: Worker rate ={" "}
+                              Step 2: Worker rate (Team member) ={" "}
                               {formatCurrency(
                                 calc.revenueBreakdown.stepByStepCalculation
                                   .step2WorkerRate
@@ -1818,6 +1825,20 @@ function App() {
                               {formatCurrency(
                                 calc.revenueBreakdown.stepByStepCalculation
                                   .step3LeftoverAfterWorker
+                              )}
+                            </p>
+                            <p>
+                              Step 4: Management fee (10%) ={" "}
+                              {formatCurrency(
+                                calc.revenueBreakdown.stepByStepCalculation
+                                  .step4ManagementFee
+                              )}
+                            </p>
+                            <p>
+                              Step 5: Robert's profit ={" "}
+                              {formatCurrency(
+                                calc.revenueBreakdown.stepByStepCalculation
+                                  .step5RobertProfit
                               )}
                             </p>
                           </div>
@@ -1873,7 +1894,6 @@ function App() {
                           type: dist.type,
                         })
                       ),
-                      deductionType: profile.deductionType,
                       deductions: profile.deductions.map((d) => ({
                         name: d.name,
                         amount: d.amount,
@@ -2240,7 +2260,7 @@ function App() {
                           <div className="flex items-center space-x-3">
                             <input
                               type="text"
-                              placeholder="Naam (bijv. Dylan, Mijn Marge)"
+                              placeholder="Naam (bijv. Robert, Mijn Marge)"
                               className="flex-1 rounded-xl border-0 bg-white px-3 py-2 text-slate-900 shadow-soft ring-1 ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-green-500 focus:ring-offset-0 transition-all duration-200"
                               value={dist.name}
                               onChange={(e) =>
@@ -2310,51 +2330,6 @@ function App() {
                           </p>
                         </div>
                       )}
-                    </div>
-                  </div>
-
-                  {/* Deduction Type */}
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
-                      Aftrektype
-                    </label>
-                    <div className="flex space-x-4">
-                      <label className="flex items-center">
-                        <input
-                          type="radio"
-                          name="deductionType"
-                          value="Uurloon"
-                          checked={profileForm.deductionType === "Uurloon"}
-                          onChange={(e) =>
-                            setProfileForm({
-                              ...profileForm,
-                              deductionType: e.target.value as
-                                | "Uurloon"
-                                | "Marge",
-                            })
-                          }
-                          className="mr-2"
-                        />
-                        Uurloon
-                      </label>
-                      <label className="flex items-center">
-                        <input
-                          type="radio"
-                          name="deductionType"
-                          value="Marge"
-                          checked={profileForm.deductionType === "Marge"}
-                          onChange={(e) =>
-                            setProfileForm({
-                              ...profileForm,
-                              deductionType: e.target.value as
-                                | "Uurloon"
-                                | "Marge",
-                            })
-                          }
-                          className="mr-2"
-                        />
-                        Marge
-                      </label>
                     </div>
                   </div>
 
