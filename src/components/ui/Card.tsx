@@ -6,6 +6,7 @@ export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   padding?: 'none' | 'sm' | 'md' | 'lg';
   children: React.ReactNode;
 }
+console.log('Card');
 
 const Card = React.forwardRef<HTMLDivElement, CardProps>(
   (
