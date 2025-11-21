@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Calculator,
   Users,
@@ -153,6 +153,9 @@ function App() {
     PaymentDistribution[]
   >([]);
   const [showProfilesToast, setShowProfilesToast] = useState(false);
+  
+  // Track if initial load from localStorage has completed
+  const isInitialLoadComplete = useRef(false);
 
   const generateId = () => {
     return Math.random().toString(36).substr(2, 9);
@@ -225,10 +228,13 @@ function App() {
             date: new Date(entry.date),
           })
         );
+        console.log("Loading hours from localStorage:", parsedHours.length, "entries");
         setHoursEntries(parsedHours);
       } catch (error) {
         console.error("Error loading hours:", error);
       }
+    } else {
+      console.log("No saved hours found in localStorage");
     }
 
     if (savedAppliedDeductions) {
@@ -238,6 +244,15 @@ function App() {
         console.error("Error loading applied deductions:", error);
       }
     }
+    
+    // Mark initial load as complete
+    // Use requestAnimationFrame to ensure this happens after React processes state updates
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        isInitialLoadComplete.current = true;
+        console.log("Initial load complete");
+      });
+    });
   }, []);
 
   // Save data to localStorage whenever profiles, hours or applied deductions change
@@ -251,11 +266,20 @@ function App() {
   }, [profiles]);
 
   useEffect(() => {
-    if (hoursEntries.length > 0) {
-      localStorage.setItem(
-        "urenregistratie-hours",
-        JSON.stringify(hoursEntries)
-      );
+    // Only save to localStorage after initial load is complete
+    // This prevents overwriting localStorage with empty array on initial mount
+    if (isInitialLoadComplete.current) {
+      try {
+        console.log("Saving hours to localStorage:", hoursEntries.length, "entries");
+        localStorage.setItem(
+          "urenregistratie-hours",
+          JSON.stringify(hoursEntries)
+        );
+      } catch (error) {
+        console.error("Error saving hours to localStorage:", error);
+      }
+    } else {
+      console.log("Skipping save - initial load not complete yet. Hours entries:", hoursEntries.length);
     }
   }, [hoursEntries]);
 
