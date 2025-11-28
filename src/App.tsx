@@ -1701,7 +1701,9 @@ function App() {
                             Aftrek
                           </p>
                           <p className="font-semibold text-red-600 text-lg">
-                            -{formatCurrency(calc.totalDeductions)}
+                            {calc.totalDeductions > 0 
+                              ? `-${formatCurrency(calc.totalDeductions)}`
+                              : formatCurrency(calc.totalDeductions)}
                           </p>
                         </div>
 
