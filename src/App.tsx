@@ -2068,9 +2068,15 @@ function App() {
       {/* Profile Management Modal */}
       {isProfileModalOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity" />
+          <div 
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
+            onClick={() => setIsProfileModalOpen(false)}
+          />
           <div className="flex min-h-full items-center justify-center p-4">
-            <div className="relative w-full max-w-2xl bg-white rounded-2xl shadow-large">
+            <div 
+              className="relative w-full max-w-2xl bg-white rounded-2xl shadow-large"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="flex items-center justify-between p-6 border-b border-slate-200">
                 <div className="flex-1">
                   <h2 className="text-2xl font-semibold text-slate-900 tracking-tight">
@@ -2554,9 +2560,15 @@ function App() {
       {/* Hours Input Modal */}
       {isHoursModalOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity" />
+          <div 
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
+            onClick={() => setIsHoursModalOpen(false)}
+          />
           <div className="flex min-h-full items-center justify-center p-4">
-            <div className="relative w-full max-w-md bg-white rounded-2xl shadow-large">
+            <div 
+              className="relative w-full max-w-md bg-white rounded-2xl shadow-large"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="flex items-center justify-between p-6 border-b border-slate-200">
                 <div className="flex-1">
                   <h2 className="text-2xl font-semibold text-slate-900 tracking-tight">
